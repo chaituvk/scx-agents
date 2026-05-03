@@ -1,0 +1,26 @@
+{
+  "sims": [
+    {
+      "id": "vs-5",
+      "tenant_id": "r-travel",
+      "name": "Office - Native Speaker",
+      "noise_level": "moderate",
+      "speaker_type": "native",
+      "transcript": "I'd like to check the status of my booking.",
+      "confidence": 0.89,
+      "accuracy": 0.94,
+      "status": "pass"
+    },
+    {
+      "id": "vs-6",
+      "tenant_id": "r-travel",
+      "name": "Quiet Room - Elderly Speaker",
+      "noise_level": "quiet",
+      "speaker_type": "elderly",
+      "transcript": "Young man, I booked this trip last month and need to cancel. Can you help an old lady?",
+      "confidence": 0.92,
+      "accuracy": 0.95,
+      "status": "pass"
+    }
+  ]
+}

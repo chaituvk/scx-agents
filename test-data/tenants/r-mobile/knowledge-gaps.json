@@ -1,0 +1,13 @@
+{
+  "gaps": [
+    {
+      "id": "gap-1",
+      "tenant_id": "r-mobile",
+      "question": "How do I transfer my number to a new device?",
+      "frequency": 45,
+      "status": "open",
+      "suggested_answer": "Use the SIM transfer tool in Settings > Cellular.",
+      "source_ids": ["ks-1"]
+    }
+  ]
+}

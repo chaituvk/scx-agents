@@ -1,0 +1,24 @@
+{
+  "integrations": [
+    {
+      "id": "int-5",
+      "tenant_id": "r-travel",
+      "name": "Amadeus",
+      "type": "Travel",
+      "status": "connected",
+      "records": "500K",
+      "last_sync": "10 min ago",
+      "config": {"endpoint": "https://api.amadeus.com"}
+    },
+    {
+      "id": "int-6",
+      "tenant_id": "r-travel",
+      "name": "Booking.com",
+      "type": "Travel",
+      "status": "syncing",
+      "records": "1.2M",
+      "last_sync": "in progress",
+      "config": {"endpoint": "https://api.booking.com"}
+    }
+  ]
+}

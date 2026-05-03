@@ -1,0 +1,28 @@
+{
+  "sources": [
+    {
+      "id": "ks-3",
+      "tenant_id": "ichiba",
+      "name": "Return & Refund Policy",
+      "type": "policy",
+      "status": "active",
+      "entries": 12,
+      "url": "https://ichiba.com/policies/returns",
+      "last_sync": "1 hour ago",
+      "gaps": null,
+      "config": {"auto_sync": true, "frequency": "weekly"}
+    },
+    {
+      "id": "ks-4",
+      "tenant_id": "ichiba",
+      "name": "Shipping Guidelines",
+      "type": "policy",
+      "status": "error",
+      "entries": 8,
+      "url": "https://ichiba.com/policies/shipping",
+      "last_sync": "3 days ago",
+      "gaps": ["Missing international shipping info", "No holiday cutoff dates"],
+      "config": {"auto_sync": false}
+    }
+  ]
+}

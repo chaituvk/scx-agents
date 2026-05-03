@@ -1,0 +1,15 @@
+{
+  "tenant": {
+    "id": "r-travel",
+    "name": "RTravel",
+    "slug": "r-travel",
+    "primary_color": "#06b6d4",
+    "accent_color": "#0f172a",
+    "welcome_message": "Hello traveler! Ready to plan your next adventure?",
+    "tone": "enthusiastic",
+    "off_limit_topics": ["Visa fraud", "Illegal destinations", "Travel insurance scams"],
+    "off_limit_phrases": ["I don't care", "That's your fault", "Nothing I can do"],
+    "approval_threshold": 1000,
+    "require_approval": true
+  }
+}

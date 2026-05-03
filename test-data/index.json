@@ -1,0 +1,43 @@
+{
+  "tenants": [
+    {
+      "id": "r-mobile",
+      "name": "R-Mobile",
+      "slug": "r-mobile",
+      "primary_color": "#ef4444",
+      "accent_color": "#1e293b",
+      "welcome_message": "Welcome to R-Mobile! How can we help with your device or plan today?",
+      "tone": "professional",
+      "off_limit_topics": ["Competitor pricing", "Unlocking devices", "Third-party repairs"],
+      "off_limit_phrases": ["I don't know", "That's not my department", "Call back later"],
+      "approval_threshold": 300,
+      "require_approval": true
+    },
+    {
+      "id": "ichiba",
+      "name": "Ichiba",
+      "slug": "ichiba",
+      "primary_color": "#f97316",
+      "accent_color": "#0f172a",
+      "welcome_message": "Konnichiwa! Welcome to Ichiba. What can we help you find today?",
+      "tone": "empathetic",
+      "off_limit_topics": ["Counterfeit items", "Illegal goods", "Tax evasion"],
+      "off_limit_phrases": ["Not my problem", "Figure it out yourself", "I am busy"],
+      "approval_threshold": 500,
+      "require_approval": true
+    },
+    {
+      "id": "r-travel",
+      "name": "RTravel",
+      "slug": "r-travel",
+      "primary_color": "#06b6d4",
+      "accent_color": "#0f172a",
+      "welcome_message": "Hello traveler! Ready to plan your next adventure?",
+      "tone": "enthusiastic",
+      "off_limit_topics": ["Visa fraud", "Illegal destinations", "Travel insurance scams"],
+      "off_limit_phrases": ["I don't care", "That's your fault", "Nothing I can do"],
+      "approval_threshold": 1000,
+      "require_approval": true
+    }
+  ]
+}

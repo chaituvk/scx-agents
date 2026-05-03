@@ -1,0 +1,15 @@
+{
+  "tenant": {
+    "id": "r-mobile",
+    "name": "R-Mobile",
+    "slug": "r-mobile",
+    "primary_color": "#ef4444",
+    "accent_color": "#1e293b",
+    "welcome_message": "Welcome to R-Mobile! How can we help with your device or plan today?",
+    "tone": "professional",
+    "off_limit_topics": ["Competitor pricing", "Unlocking devices", "Third-party repairs"],
+    "off_limit_phrases": ["I don't know", "That's not my department", "Call back later"],
+    "approval_threshold": 300,
+    "require_approval": true
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "sources": [
+    {
+      "id": "ks-1",
+      "tenant_id": "r-mobile",
+      "name": "Device Support Articles",
+      "type": "help-center",
+      "status": "active",
+      "entries": 156,
+      "url": "https://support.rmobile.com/hc",
+      "last_sync": "2 min ago",
+      "gaps": null,
+      "config": {"auto_sync": true, "frequency": "daily"}
+    },
+    {
+      "id": "ks-2",
+      "tenant_id": "r-mobile",
+      "name": "Warranty Policy",
+      "type": "policy",
+      "status": "active",
+      "entries": 8,
+      "url": "https://rmobile.com/policies/warranty",
+      "last_sync": "1 hour ago",
+      "gaps": null,
+      "config": {"auto_sync": true, "frequency": "weekly"}
+    }
+  ]
+}

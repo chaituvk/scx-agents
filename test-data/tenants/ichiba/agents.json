@@ -1,0 +1,25 @@
+{
+  "agents": [
+    {
+      "id": "agent-3",
+      "tenant_id": "ichiba",
+      "name": "Ichiba Support",
+      "description": "Handles orders, shipping, returns",
+      "status": "production",
+      "goals": ["Resolve issues", "Maintain CSAT"],
+      "skills": ["order_lookup", "return_processing", "refund_handling"],
+      "guardrails": ["Never blame customer", "Max refund $500 without approval"],
+      "languages": ["English", "Japanese"],
+      "channels": ["web", "chat"],
+      "tone": "empathetic",
+      "welcome_message": "Konnichiwa! How can we help today?",
+      "primary_color": "#f97316",
+      "accent_color": "#0f172a",
+      "off_limit_topics": ["Counterfeit items"],
+      "off_limit_phrases": ["Not my problem"],
+      "approval_threshold": 500,
+      "require_approval": 1,
+      "version": "1.0.0"
+    }
+  ]
+}

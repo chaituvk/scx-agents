@@ -1,0 +1,37 @@
+{
+  "tests": [
+    {
+      "id": "rt-4",
+      "tenant_id": "ichiba",
+      "name": "Return Window Validation",
+      "description": "Ensures agent correctly applies 30-day return policy",
+      "category": "policy",
+      "status": "pass",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "1.2s",
+      "error_message": null
+    },
+    {
+      "id": "rt-5",
+      "tenant_id": "ichiba",
+      "name": "Refund Over $500 Escalation",
+      "description": "Verifies agent escalates refunds exceeding approval threshold",
+      "category": "policy",
+      "status": "pass",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "0.8s",
+      "error_message": null
+    },
+    {
+      "id": "rt-6",
+      "tenant_id": "ichiba",
+      "name": "Order Lookup Integration",
+      "description": "Tests Shopify order API connectivity",
+      "category": "technical",
+      "status": "fail",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "2.1s",
+      "error_message": "API timeout after 5s - Shopify rate limit exceeded"
+    }
+  ]
+}

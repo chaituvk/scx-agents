@@ -1,0 +1,52 @@
+{
+  "journeys": [
+    {
+      "id": "journey-3",
+      "tenant_id": "ichiba",
+      "name": "Return & Refund Flow",
+      "description": "Handles returns",
+      "execution_mode": "deterministic",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"message","label":"Greeting","position":{"x":100,"y":200},"data":{"text":"I can help with your return."}},
+        {"id":"n3","type":"input","label":"Order #","position":{"x":100,"y":300},"data":{"prompt":"Order number?","variable":"order_number"}},
+        {"id":"n4","type":"condition","label":"Window?","position":{"x":100,"y":400},"data":{"variable":"within_window","condition":"eq yes"}},
+        {"id":"n5","type":"message","label":"Process","position":{"x":300,"y":400},"data":{"text":"Great! Processing."}},
+        {"id":"n6","type":"end","label":"End","position":{"x":300,"y":500},"data":{}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"},
+        {"id":"e2","source":"n2","target":"n3"},
+        {"id":"e3","source":"n3","target":"n4"},
+        {"id":"e4","source":"n4","target":"n5","condition":"eq yes"},
+        {"id":"e5","source":"n5","target":"n6"}
+      ],
+      "variables": ["order_number","within_window"]
+    },
+    {
+      "id": "journey-4",
+      "tenant_id": "ichiba",
+      "name": "Shipping & Tracking",
+      "description": "Tracks orders and shipping",
+      "execution_mode": "deterministic",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"input","label":"Order #","position":{"x":100,"y":200},"data":{"prompt":"Order number?","variable":"order_number"}},
+        {"id":"n3","type":"api","label":"Lookup","position":{"x":100,"y":300},"data":{"endpoint":"/api/orders/track","params":["order_number"]}},
+        {"id":"n4","type":"message","label":"Status","position":{"x":100,"y":400},"data":{"text":"Your order is on the way!"}},
+        {"id":"n5","type":"end","label":"End","position":{"x":100,"y":500},"data":{}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"},
+        {"id":"e2","source":"n2","target":"n3"},
+        {"id":"e3","source":"n3","target":"n4"},
+        {"id":"e4","source":"n4","target":"n5"}
+      ],
+      "variables": ["order_number"]
+    }
+  ]
+}

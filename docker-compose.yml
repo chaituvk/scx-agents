@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  # ── PostgreSQL + pgvector (Vector DB + Database in one) ───────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sierra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sierra
+      POSTGRES_PASSWORD: sierra2026
+      POSTGRES_DB: sierra
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sierra -d sierra"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (Cache) ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: sierra-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:

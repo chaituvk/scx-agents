@@ -1,0 +1,26 @@
+{
+  "sims": [
+    {
+      "id": "vs-3",
+      "tenant_id": "ichiba",
+      "name": "Quiet Room - Non-Native Accent",
+      "noise_level": "quiet",
+      "speaker_type": "non-native",
+      "transcript": "Hello, my order is break. I want money back please.",
+      "confidence": 0.85,
+      "accuracy": 0.91,
+      "status": "pass"
+    },
+    {
+      "id": "vs-4",
+      "tenant_id": "ichiba",
+      "name": "Drive-Thru - Native Speaker",
+      "noise_level": "very-noisy",
+      "speaker_type": "native",
+      "transcript": "...return... [wind noise] ...order... [engine] ...refund...",
+      "confidence": 0.45,
+      "accuracy": 0.38,
+      "status": "fail"
+    }
+  ]
+}

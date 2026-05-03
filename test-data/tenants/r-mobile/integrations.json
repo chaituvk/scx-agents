@@ -1,0 +1,24 @@
+{
+  "integrations": [
+    {
+      "id": "int-1",
+      "tenant_id": "r-mobile",
+      "name": "Device Inventory",
+      "type": "CRM",
+      "status": "connected",
+      "records": "2.4M",
+      "last_sync": "15 min ago",
+      "config": {"endpoint": "https://api.rmobile.com/devices"}
+    },
+    {
+      "id": "int-2",
+      "tenant_id": "r-mobile",
+      "name": "Billing System",
+      "type": "Payment",
+      "status": "connected",
+      "records": "1.8M",
+      "last_sync": "1 hour ago",
+      "config": {"endpoint": "https://api.rmobile.com/billing"}
+    }
+  ]
+}

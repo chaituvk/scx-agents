@@ -1,0 +1,26 @@
+{
+  "sims": [
+    {
+      "id": "vs-1",
+      "tenant_id": "r-mobile",
+      "name": "Quiet Room - Native Speaker",
+      "noise_level": "quiet",
+      "speaker_type": "native",
+      "transcript": "Hi, my phone screen is cracked. Can you help?",
+      "confidence": 0.97,
+      "accuracy": 0.98,
+      "status": "pass"
+    },
+    {
+      "id": "vs-2",
+      "tenant_id": "r-mobile",
+      "name": "Noisy Cafe - Native Speaker",
+      "noise_level": "noisy",
+      "speaker_type": "native",
+      "transcript": "Hi... [static] ...screen... [static] ...cracked.",
+      "confidence": 0.72,
+      "accuracy": 0.65,
+      "status": "fail"
+    }
+  ]
+}

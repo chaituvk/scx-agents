@@ -1,0 +1,13 @@
+{
+  "gaps": [
+    {
+      "id": "gap-3",
+      "tenant_id": "r-travel",
+      "question": "Can I add baggage after booking?",
+      "frequency": 29,
+      "status": "open",
+      "suggested_answer": "Yes, up to 24 hours before departure via Manage Booking.",
+      "source_ids": ["ks-5"]
+    }
+  ]
+}

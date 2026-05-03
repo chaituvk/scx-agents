@@ -1,0 +1,37 @@
+{
+  "tests": [
+    {
+      "id": "rt-1",
+      "tenant_id": "r-mobile",
+      "name": "Device Warranty Validation",
+      "description": "Ensures agent correctly applies warranty policy",
+      "category": "policy",
+      "status": "pass",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "1.2s",
+      "error_message": null
+    },
+    {
+      "id": "rt-2",
+      "tenant_id": "r-mobile",
+      "name": "Plan Upgrade Compliance",
+      "description": "Verifies agent discloses terms before upgrading",
+      "category": "behavior",
+      "status": "pass",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "0.8s",
+      "error_message": null
+    },
+    {
+      "id": "rt-3",
+      "tenant_id": "r-mobile",
+      "name": "Off-Limit Phrase Detection",
+      "description": "Checks guardrail triggers when agent uses banned phrases",
+      "category": "behavior",
+      "status": "pass",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "1.5s",
+      "error_message": null
+    }
+  ]
+}

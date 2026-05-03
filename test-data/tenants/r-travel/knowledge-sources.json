@@ -1,0 +1,28 @@
+{
+  "sources": [
+    {
+      "id": "ks-5",
+      "tenant_id": "r-travel",
+      "name": "Destination Guides",
+      "type": "faq",
+      "status": "active",
+      "entries": 89,
+      "url": null,
+      "last_sync": "15 min ago",
+      "gaps": null,
+      "config": {"auto_sync": true, "frequency": "hourly"}
+    },
+    {
+      "id": "ks-6",
+      "tenant_id": "r-travel",
+      "name": "Cancellation Policy",
+      "type": "policy",
+      "status": "active",
+      "entries": 5,
+      "url": "https://rtravel.com/policies/cancellation",
+      "last_sync": "30 min ago",
+      "gaps": null,
+      "config": {"auto_sync": true, "frequency": "daily"}
+    }
+  ]
+}

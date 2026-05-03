@@ -1,0 +1,46 @@
+{
+  "journeys": [
+    {
+      "id": "journey-5",
+      "tenant_id": "r-travel",
+      "name": "Booking Assistant",
+      "description": "AI booking assistant",
+      "execution_mode": "llm",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"end","label":"End","position":{"x":100,"y":200},"data":{"text":"Enjoy your trip!"}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"}
+      ],
+      "variables": []
+    },
+    {
+      "id": "journey-6",
+      "tenant_id": "r-travel",
+      "name": "Cancellation & Refund",
+      "description": "Hybrid cancellation flow",
+      "execution_mode": "hybrid",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"input","label":"Booking Ref","position":{"x":100,"y":200},"data":{"prompt":"Booking reference?","variable":"booking_ref"}},
+        {"id":"n3","type":"condition","label":"Free Cancel?","position":{"x":100,"y":300},"data":{"variable":"free_cancel","condition":"eq yes"}},
+        {"id":"n4","type":"message","label":"Refunded","position":{"x":300,"y":300},"data":{"text":"Cancellation processed!"}},
+        {"id":"n5","type":"transfer","label":"Agent","position":{"x":100,"y":400},"data":{"department":"Support"}},
+        {"id":"n6","type":"end","label":"End","position":{"x":300,"y":400},"data":{}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"},
+        {"id":"e2","source":"n2","target":"n3"},
+        {"id":"e3","source":"n3","target":"n4","condition":"eq yes"},
+        {"id":"e4","source":"n3","target":"n5"},
+        {"id":"e5","source":"n4","target":"n6"}
+      ],
+      "variables": ["booking_ref","free_cancel"]
+    }
+  ]
+}

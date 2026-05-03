@@ -1,0 +1,13 @@
+{
+  "gaps": [
+    {
+      "id": "gap-2",
+      "tenant_id": "ichiba",
+      "question": "How do I change my shipping address after ordering?",
+      "frequency": 38,
+      "status": "open",
+      "suggested_answer": "Contact support within 2 hours.",
+      "source_ids": ["ks-4"]
+    }
+  ]
+}

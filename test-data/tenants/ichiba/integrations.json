@@ -1,0 +1,24 @@
+{
+  "integrations": [
+    {
+      "id": "int-3",
+      "tenant_id": "ichiba",
+      "name": "Shopify",
+      "type": "E-commerce",
+      "status": "connected",
+      "records": "1.8M",
+      "last_sync": "1 hour ago",
+      "config": {"endpoint": "https://ichiba.myshopify.com"}
+    },
+    {
+      "id": "int-4",
+      "tenant_id": "ichiba",
+      "name": "Stripe",
+      "type": "Payment",
+      "status": "connected",
+      "records": "890K",
+      "last_sync": "5 min ago",
+      "config": {"endpoint": "https://api.stripe.com"}
+    }
+  ]
+}

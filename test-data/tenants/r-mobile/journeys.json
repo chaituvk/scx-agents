@@ -1,0 +1,46 @@
+{
+  "journeys": [
+    {
+      "id": "journey-1",
+      "tenant_id": "r-mobile",
+      "name": "Device Troubleshooting",
+      "description": "Helps customers troubleshoot device issues",
+      "execution_mode": "deterministic",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"message","label":"Greeting","position":{"x":100,"y":200},"data":{"text":"I can help troubleshoot your device."}},
+        {"id":"n3","type":"input","label":"Device Model","position":{"x":100,"y":300},"data":{"prompt":"What device model?","variable":"device_model"}},
+        {"id":"n4","type":"condition","label":"Under Warranty?","position":{"x":100,"y":400},"data":{"variable":"under_warranty","condition":"eq yes"}},
+        {"id":"n5","type":"message","label":"Warranty","position":{"x":300,"y":400},"data":{"text":"Great! You're under warranty."}},
+        {"id":"n6","type":"end","label":"End","position":{"x":300,"y":500},"data":{}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"},
+        {"id":"e2","source":"n2","target":"n3"},
+        {"id":"e3","source":"n3","target":"n4"},
+        {"id":"e4","source":"n4","target":"n5","condition":"eq yes"},
+        {"id":"e5","source":"n5","target":"n6"}
+      ],
+      "variables": ["device_model","under_warranty"]
+    },
+    {
+      "id": "journey-2",
+      "tenant_id": "r-mobile",
+      "name": "Plan Upgrade Assistant",
+      "description": "AI assistant for plan upgrades",
+      "execution_mode": "llm",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"end","label":"End","position":{"x":100,"y":200},"data":{"text":"Thank you!"}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"}
+      ],
+      "variables": []
+    }
+  ]
+}

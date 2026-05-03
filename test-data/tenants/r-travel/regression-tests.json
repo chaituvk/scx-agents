@@ -1,0 +1,26 @@
+{
+  "tests": [
+    {
+      "id": "rt-7",
+      "tenant_id": "r-travel",
+      "name": "Booking Cancellation Flow",
+      "description": "Validates cancellation and refund process",
+      "category": "policy",
+      "status": "pass",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "0.9s",
+      "error_message": null
+    },
+    {
+      "id": "rt-8",
+      "tenant_id": "r-travel",
+      "name": "Multi-Turn Context Memory",
+      "description": "Verifies agent remembers destination across 5+ turns",
+      "category": "technical",
+      "status": "partial",
+      "last_run": "2026-05-03T00:00:00.000Z",
+      "duration": "4.5s",
+      "error_message": "Context lost after turn 4 when switching topics"
+    }
+  ]
+}
