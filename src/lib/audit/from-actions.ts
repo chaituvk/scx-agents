@@ -36,10 +36,12 @@ export interface JourneyHistoryEntry {
 export async function emitAuditFromActions(
   audit: AuditEmitter,
   actions: ExecutorAction[] | undefined | null,
-  context: { journeyId?: string } = {},
+  context: { journeyId?: string; skip?: string[] } = {},
 ): Promise<void> {
   if (!actions?.length) return;
+  const skip = context.skip ? new Set(context.skip) : null;
   for (const action of actions) {
+    if (skip?.has(action.type)) continue;
     const orig = action.payload ?? {};
     const journeyId = (orig.journeyId as string | undefined) ?? context.journeyId;
 
