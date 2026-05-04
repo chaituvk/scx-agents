@@ -321,6 +321,14 @@ export interface OrchestratorTurnInput {
   message: string;
   /** Existing dialog state (slots, journey position) if any. */
   variables?: Record<string, string>;
+  /**
+   * Caller-supplied routing hints. Used by /api/dialog/execute and
+   * /api/dialog/stream adapters to bypass triage when the journey is already
+   * known. When set, triage is skipped and the orchestrator routes directly
+   * to the named sub-agent / journey.
+   */
+  requestedJourneyId?: string;
+  forceSubAgent?: SubAgentName;
 }
 
 export interface OrchestratorTurnOutput {

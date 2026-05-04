@@ -6,6 +6,7 @@ import { triageSkill } from "../skills";
 import { selectSubAgent } from "../agents/registry";
 import { supervisorAgent } from "../agents/supervisor";
 import { makeAuditEmitter } from "../audit";
+import { journeyRepo } from "../repositories";
 import type {
   OrchestratorTurnInput,
   OrchestratorTurnOutput,
@@ -42,11 +43,33 @@ export class Orchestrator {
       customerId: input.customerId,
     });
 
-    // 2. Triage.
-    const triage: TriageOutput = await triageSkill.run(
-      { message: input.message, history: memCtx.history, knownIntents: KNOWN_INTENTS },
-      ctx
-    );
+    // 2. Triage — skipped when caller supplies routing hints (legacy
+    //    /api/dialog/* adapters that already know the journey + sub-agent).
+    //    When only requestedJourneyId is provided, infer the sub-agent from
+    //    the journey's execution_mode (llm -> rag, otherwise workflow) so
+    //    callers that know the journey but not the sub-agent still route
+    //    correctly. Intent is always "forced" so downstream analytics can
+    //    distinguish hint-driven turns from triage-driven ones.
+    let triage: TriageOutput;
+    if (input.forceSubAgent || input.requestedJourneyId) {
+      let subAgent = input.forceSubAgent;
+      if (!subAgent && input.requestedJourneyId) {
+        const journey = await journeyRepo.findByIdForTenant(input.requestedJourneyId, input.tenantId);
+        subAgent = journey?.execution_mode === "llm" ? "rag" : "workflow";
+      }
+      triage = {
+        intent: "forced",
+        subAgent: subAgent ?? "workflow",
+        journeyId: input.requestedJourneyId,
+        confidence: 1.0,
+        rationale: "forced via caller hint",
+      };
+    } else {
+      triage = await triageSkill.run(
+        { message: input.message, history: memCtx.history, knownIntents: KNOWN_INTENTS },
+        ctx
+      );
+    }
     await audit.emit("route_decision", {
       intent: triage.intent,
       subAgent: triage.subAgent,
