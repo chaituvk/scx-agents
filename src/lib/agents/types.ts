@@ -141,6 +141,7 @@ export interface Profile {
 export type MemoryLayer = "ephemeral" | "profile" | "history" | "knowledge";
 
 export interface MemoryQuery {
+  tenantId: string;
   conversationId: string;
   customerId?: string;
   topics?: string[];
@@ -208,6 +209,58 @@ export interface AuditEvent {
 
 export interface AuditEmitter {
   emit(type: AuditEventType, payload: Record<string, unknown>): Promise<void>;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Session state — single object per (tenant_id, conversation_id) replacing the
+// scattered dialog_state / conversation fields. Persisted on the dialog_states
+// row (extended with nullable JSONB columns); stage 3+ wires this into the
+// orchestrator turn contract.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface PendingAction {
+  id: string;
+  tool: string;
+  params: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface PendingApproval {
+  id: string;
+  reason: string;
+  approver?: string;
+  target: string;
+  createdAt: string;
+}
+
+export interface TopicFrame {
+  intent: string;
+  journeyId?: string;
+  nodeId?: string;
+  pushedAt: string;
+}
+
+export interface HandoffState {
+  active: boolean;
+  reason?: string;
+  targetSubAgent?: SubAgentName;
+  toHuman?: boolean;
+}
+
+export interface SessionState {
+  tenantId: string;
+  conversationId: string;
+  activeAgent: SubAgentName | null;
+  activeJourneyId: string | null;
+  currentNodeId: string | null;
+  slots: Record<string, string | number | boolean>;
+  pendingAction: PendingAction | null;
+  pendingApproval: PendingApproval | null;
+  lastIntent: string | null;
+  topicStack: TopicFrame[];
+  handoffState: HandoffState;
+  auditTraceId: string;
+  updatedAt: string;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

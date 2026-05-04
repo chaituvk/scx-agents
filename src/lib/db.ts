@@ -285,6 +285,12 @@ function initPgSchema() {
       history JSONB,
       context JSONB,
       done INTEGER DEFAULT 0,
+      active_agent TEXT,
+      last_intent TEXT,
+      pending_action JSONB,
+      pending_approval JSONB,
+      topic_stack JSONB,
+      handoff_state JSONB,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -392,6 +398,12 @@ function initPgSchema() {
     ALTER TABLE flagged_conversations ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE runtime_profiles ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS active_agent TEXT;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS last_intent TEXT;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS pending_action JSONB;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS pending_approval JSONB;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS topic_stack JSONB;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS handoff_state JSONB;
     ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE knowledge_gaps ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE regression_tests ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
@@ -596,6 +608,12 @@ function initSqliteSchema() {
       history TEXT,
       context TEXT,
       done INTEGER DEFAULT 0,
+      active_agent TEXT,
+      last_intent TEXT,
+      pending_action TEXT,
+      pending_approval TEXT,
+      topic_stack TEXT,
+      handoff_state TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -712,6 +730,24 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_journey_scenarios_tenant ON journey_scenarios(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_journey_scenarios_journey ON journey_scenarios(journey_id);
   `);
+
+  // Idempotent additive column migrations for existing SQLite databases.
+  // SQLite ADD COLUMN doesn't support IF NOT EXISTS, so we check via PRAGMA.
+  const dialogCols = sqliteDb.prepare("PRAGMA table_info(dialog_states)").all() as { name: string }[];
+  const existing = new Set(dialogCols.map((c) => c.name));
+  const additions: Array<[string, string]> = [
+    ["active_agent", "TEXT"],
+    ["last_intent", "TEXT"],
+    ["pending_action", "TEXT"],
+    ["pending_approval", "TEXT"],
+    ["topic_stack", "TEXT"],
+    ["handoff_state", "TEXT"],
+  ];
+  for (const [name, type] of additions) {
+    if (!existing.has(name)) {
+      sqliteDb.exec(`ALTER TABLE dialog_states ADD COLUMN ${name} ${type}`);
+    }
+  }
 }
 
 // ── Seed ────────────────────────────────────────────────────────────

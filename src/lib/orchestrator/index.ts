@@ -37,6 +37,7 @@ export class Orchestrator {
 
     // 1. Load memory.
     const memCtx = await memoryService.load({
+      tenantId: input.tenantId,
       conversationId: input.conversationId,
       customerId: input.customerId,
     });
