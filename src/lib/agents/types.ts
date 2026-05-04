@@ -284,7 +284,7 @@ export interface SessionState {
 // Sub-agents
 // ────────────────────────────────────────────────────────────────────────────
 
-export type SubAgentName = "rag" | "workflow" | "tool" | "escalation";
+export type SubAgentName = "rag" | "workflow" | "tool" | "escalation" | "general";
 
 export interface SubAgentRunInput {
   message: string;

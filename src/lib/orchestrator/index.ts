@@ -35,6 +35,9 @@ const KNOWN_INTENTS = [
   "escalate",
   "greeting",
   "continue_workflow",
+  "general_chat",
+  "smalltalk",
+  "acknowledgment",
 ];
 
 interface SessionSnapshot {

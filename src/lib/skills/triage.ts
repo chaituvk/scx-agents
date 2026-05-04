@@ -41,8 +41,11 @@ function keywordFallback(message: string, session?: TriageInput["session"]): Tri
     }
   }
 
-  let subAgent: SubAgentName = "rag";
-  let intent = "knowledge_query";
+  // Default: free-form chat → general agent. Knowledge/workflow/tool/escalation
+  // each match on explicit signals; everything else (greetings, smalltalk,
+  // acknowledgments, vague questions) lands on general.
+  let subAgent: SubAgentName = "general";
+  let intent = "general_chat";
   if (/\b(human|manager|agent|representative)\b/.test(m)) {
     subAgent = "escalation";
     intent = "escalate";
@@ -52,7 +55,9 @@ function keywordFallback(message: string, session?: TriageInput["session"]): Tri
   } else if (/\b(lookup|check|status)\b/.test(m)) {
     subAgent = "tool";
     intent = "tool_use";
-  } else if (/\b(what|how|why)\b/.test(m)) {
+  } else if (/\b(what|how|why|when|where|who)\b/.test(m) && m.split(/\s+/).length >= 4) {
+    // Substantive wh-question → likely a knowledge query worth retrieving for.
+    // Short wh-questions ("what?", "how come?") fall through to general.
     subAgent = "rag";
     intent = "knowledge_query";
   }
@@ -83,7 +88,12 @@ export const triageSkill: Skill<TriageInput, TriageOutput> = {
   name: "triage",
   async run(input: TriageInput, _ctx: SkillContext): Promise<TriageOutput> {
     const sys = `You are a triage classifier. Classify the user's message into an intent and route it to a sub-agent.
-Allowed sub-agents: "rag" (knowledge questions), "workflow" (multi-step processes like returns/refunds/kyc), "tool" (single lookups), "escalation" (handoff to human).
+Allowed sub-agents:
+- "rag" — substantive questions answerable from a knowledge base (policies, product details, how-to). Pick this only when retrieval would help.
+- "workflow" — multi-step processes (returns, refunds, KYC, cancellations).
+- "tool" — single lookups (order status, balance, tracking).
+- "escalation" — explicit request for a human / manager / live agent.
+- "general" — greetings, thanks, small talk, acknowledgments, off-topic chatter, vague clarifying messages, or anything that doesn't fit the four above.
 Known intents: ${input.knownIntents.join(", ") || "(none)"}.${sessionContextLines(input.session)}${intentMapLines(input.intentMap)}
 Return JSON with keys: intent, journeyId (optional), specialistId (optional), subAgent, confidence (0..1), rationale.`;
     const user = `Message: ${input.message}`;

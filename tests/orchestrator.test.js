@@ -93,6 +93,18 @@ async function main() {
     );
   });
 
+  await test("smalltalk routes to General", async () => {
+    const conversationId = `smoke-gen-${Date.now()}`;
+    const { status, data } = await post("/api/orchestrator", {
+      conversationId,
+      message: "Hey there, thanks!",
+    });
+    assert.strictEqual(status, 200);
+    assertSubAgent(data, "general");
+    assert.ok(typeof data.response === "string" && data.response.length > 0);
+    assert.deepStrictEqual(data.actions ?? [], []);
+  });
+
   await test("missing conversationId is rejected", async () => {
     const { status } = await post("/api/orchestrator", { message: "hi" });
     assert.strictEqual(status, 400);
