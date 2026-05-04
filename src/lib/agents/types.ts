@@ -194,7 +194,8 @@ export type AuditEventType =
   | "tool_call"
   | "policy_event"
   | "journey_transition"
-  | "supervisor_check";
+  | "supervisor_check"
+  | "escalation_handoff";
 
 export interface AuditEvent {
   id: string;

@@ -7,6 +7,8 @@ import { getTenantFromRequest } from "@/lib/tenant";
 import { loadTenantRuntime } from "@/lib/runtime/tenant-runtime";
 import { NodeLevelHybridExecutor } from "@/lib/runtime/hybrid-executor";
 import { assertTenantAccess } from "@/lib/runtime/tenant-guard";
+import { makeAuditEmitter } from "@/lib/audit";
+import { emitAuditFromActions, emitJourneyTransitions, type JourneyHistoryEntry } from "@/lib/audit/from-actions";
 
 function toEngineState(dbState: any): EngineDialogState {
   return {
@@ -43,6 +45,7 @@ export async function POST(req: NextRequest) {
   try {
     const { conversationId, journeyId, message } = await req.json();
     const tenantId = await getTenantFromRequest(req);
+    const audit = makeAuditEmitter(conversationId, tenantId);
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -79,6 +82,7 @@ export async function POST(req: NextRequest) {
           let result: any;
           let engineState: EngineDialogState;
 
+          let oldDeterministicHistory: JourneyHistoryEntry[] | undefined;
           if (!dbState) {
             engineState = DialogEngine.createState(conversationId, journey.id);
             const engine = new DialogEngine(journey as any);
@@ -96,6 +100,7 @@ export async function POST(req: NextRequest) {
             });
           } else {
             engineState = toEngineState(dbState);
+            oldDeterministicHistory = [...((dbState.history as JourneyHistoryEntry[] | undefined) ?? [])];
             const engine = new DialogEngine(journey as any);
             engineState.context.lastMessage = message;
             result = engine.handleInput(engineState, message);
@@ -108,6 +113,9 @@ export async function POST(req: NextRequest) {
               done: result.done ? 1 : 0,
             });
           }
+
+          await emitJourneyTransitions(audit, journey.id, oldDeterministicHistory, engineState.history as JourneyHistoryEntry[]);
+          await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
 
           sendEvent(controller, encoder, "node", { nodeId: engineState.currentNodeId, variables: engineState.variables });
           for (const msg of result.messages || []) {
@@ -178,6 +186,8 @@ export async function POST(req: NextRequest) {
             history,
           }, message);
 
+          await emitAuditFromActions(audit, step.actions, { journeyId: journey.id });
+
           if (step.toolCalls?.length) {
             for (const tc of step.toolCalls) sendEvent(controller, encoder, "tool", tc);
           }
@@ -226,6 +236,9 @@ export async function POST(req: NextRequest) {
               done: 0,
             });
 
+            await emitJourneyTransitions(audit, journey.id, undefined, engineState.history as JourneyHistoryEntry[]);
+            await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
+
             for (const msg of result.messages || []) {
               for await (const word of streamWords(msg)) {
                 sendEvent(controller, encoder, "chunk", { text: word });
@@ -238,6 +251,7 @@ export async function POST(req: NextRequest) {
           }
 
           const engineState = toEngineState(dbState);
+          const oldHybridHistory = [...((dbState.history as JourneyHistoryEntry[] | undefined) ?? [])];
           const result = await hybridEngine.handleInput(engineState, message);
 
           for (const msg of result.messages || []) {
@@ -254,6 +268,9 @@ export async function POST(req: NextRequest) {
             context: { ...result.state.context, lastMessage: message },
             done: result.done ? 1 : 0,
           });
+
+          await emitJourneyTransitions(audit, journey.id, oldHybridHistory, result.state.history as JourneyHistoryEntry[]);
+          await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
 
           await updateConversationLifecycle(conversationId, result.done, result.actions || []);
           sendEvent(controller, encoder, "done", { done: result.done, state: { currentNodeId: result.state.currentNodeId, variables: result.state.variables } });

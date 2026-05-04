@@ -7,6 +7,8 @@ import { getTenantFromRequest } from "@/lib/tenant";
 import { loadTenantRuntime } from "@/lib/runtime/tenant-runtime";
 import { NodeLevelHybridExecutor } from "@/lib/runtime/hybrid-executor";
 import { assertTenantAccess } from "@/lib/runtime/tenant-guard";
+import { makeAuditEmitter } from "@/lib/audit";
+import { emitAuditFromActions, emitJourneyTransitions, type JourneyHistoryEntry } from "@/lib/audit/from-actions";
 
 function toEngineState(dbState: any): EngineDialogState {
   return {
@@ -44,6 +46,7 @@ export async function POST(req: NextRequest) {
   try {
     const { conversationId, journeyId, message } = await req.json();
     const tenantId = await getTenantFromRequest(req);
+    const audit = makeAuditEmitter(conversationId, tenantId);
 
     const conversation = await conversationRepo.findByIdForTenant(conversationId, tenantId);
     if (!conversation) {
@@ -83,6 +86,9 @@ export async function POST(req: NextRequest) {
           done: 0,
         });
 
+        await emitJourneyTransitions(audit, journey.id, undefined, engineState.history as JourneyHistoryEntry[]);
+        await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
+
         return NextResponse.json({
           messages: result.messages,
           done: result.done,
@@ -93,6 +99,7 @@ export async function POST(req: NextRequest) {
       }
 
       const engineState = toEngineState(dbState);
+      const oldHistory = [...((dbState.history as JourneyHistoryEntry[] | undefined) ?? [])];
       const engine = new DialogEngine(journey as any);
       engineState.context.lastMessage = message;
       const result = engine.handleInput(engineState, message);
@@ -104,6 +111,9 @@ export async function POST(req: NextRequest) {
         context: engineState.context,
         done: result.done ? 1 : 0,
       });
+
+      await emitJourneyTransitions(audit, journey.id, oldHistory, engineState.history as JourneyHistoryEntry[]);
+      await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
 
       await updateConversationLifecycle(conversationId, result.done, result.actions || []);
 
@@ -170,6 +180,8 @@ export async function POST(req: NextRequest) {
         history: messages,
       }, message);
 
+      await emitAuditFromActions(audit, step.actions, { journeyId: journey.id });
+
       await messageRepo.create({ tenant_id: tenantId, conversation_id: conversationId, role: "assistant", content: step.response, agent_id: agent.id });
 
       const newVars = { ...(dbState.variables || {}), ...(step.variables || {}) };
@@ -213,6 +225,9 @@ export async function POST(req: NextRequest) {
           done: 0,
         });
 
+        await emitJourneyTransitions(audit, journey.id, undefined, engineState.history as JourneyHistoryEntry[]);
+        await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
+
         return NextResponse.json({
           messages: result.messages,
           done: result.done,
@@ -223,6 +238,7 @@ export async function POST(req: NextRequest) {
       }
 
       const engineState = toEngineState(dbState);
+      const oldHybridHistory = [...((dbState.history as JourneyHistoryEntry[] | undefined) ?? [])];
 
       const result = await hybridEngine.handleInput(engineState, message);
 
@@ -233,6 +249,9 @@ export async function POST(req: NextRequest) {
         context: { ...result.state.context, lastMessage: message },
         done: result.done ? 1 : 0,
       });
+
+      await emitJourneyTransitions(audit, journey.id, oldHybridHistory, result.state.history as JourneyHistoryEntry[]);
+      await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
 
       await updateConversationLifecycle(conversationId, result.done, result.actions || []);
 

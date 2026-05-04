@@ -3,6 +3,8 @@ import { simulationRunRepo, journeyRepo, journeyScenarioRepo, toJourneyScenario 
 import { getTenantFromRequest } from "@/lib/tenant";
 import { createSmokeScenario, runJourneyScenario } from "@/lib/journey/scenario-runner";
 import { loadTenantRuntime } from "@/lib/runtime/tenant-runtime";
+import { makeAuditEmitter } from "@/lib/audit";
+import { emitAuditFromActions, emitJourneyTransitions, type JourneyHistoryEntry } from "@/lib/audit/from-actions";
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,6 +37,12 @@ export async function POST(req: NextRequest) {
           messages: result.messages,
         });
         runs.push(run);
+
+        const audit = makeAuditEmitter(`sim:${run.id}`, tenantId);
+        const now = new Date().toISOString();
+        const transitions: JourneyHistoryEntry[] = result.visitedNodes.map((nodeId) => ({ nodeId, timestamp: now }));
+        await emitJourneyTransitions(audit, journey.id, undefined, transitions);
+        await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
       }
     }
 
