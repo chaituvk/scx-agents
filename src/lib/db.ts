@@ -344,6 +344,15 @@ function initPgSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      ts TIMESTAMPTZ NOT NULL,
+      type TEXT NOT NULL,
+      payload JSONB NOT NULL
+    );
+
     -- Migration: add tenant_id to existing tables (must run before indexes)
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE integrations ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
@@ -382,6 +391,9 @@ function initPgSchema() {
     ON knowledge_embeddings
     USING hnsw (embedding vector_cosine_ops);
     CREATE INDEX IF NOT EXISTS idx_knowledge_embeddings_tenant ON knowledge_embeddings(tenant_id);
+
+    CREATE INDEX IF NOT EXISTS idx_audit_events_conversation_ts ON audit_events(conversation_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -597,6 +609,15 @@ function initSqliteSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      ts TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_messages_tenant ON messages(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
@@ -615,6 +636,8 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_regression_tests_tenant ON regression_tests(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_voice_sims_tenant ON voice_sims(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_simulation_runs_tenant ON simulation_runs(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_conversation_ts ON audit_events(conversation_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
   `);
 }
 

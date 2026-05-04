@@ -1,0 +1,282 @@
+// Shared types for the Orchestrator architecture.
+//
+// Layering (high → low):
+//   Orchestrator → SubAgent → Skill → (LLM via ModelRouter | Tool | RAG)
+//
+// Cross-cutting services: MemoryService, PolicyChecker, AuditStore, Supervisor.
+
+import type { Message } from "../repositories/message";
+
+// ────────────────────────────────────────────────────────────────────────────
+// Model routing
+// ────────────────────────────────────────────────────────────────────────────
+
+export type ModelTier = "small" | "reasoning" | "large";
+
+export interface ModelCallOptions {
+  tier?: ModelTier;
+  temperature?: number;
+  maxTokens?: number;
+  jsonMode?: boolean;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Skills (primitives)
+// ────────────────────────────────────────────────────────────────────────────
+
+export type SkillName =
+  | "triage"
+  | "retrieve"
+  | "extract_slot"
+  | "respond"
+  | "confirm"
+  | "act"
+  | "summarize";
+
+export interface Skill<I, O> {
+  readonly name: SkillName;
+  run(input: I, ctx: SkillContext): Promise<O>;
+}
+
+export interface SkillContext {
+  conversationId: string;
+  tenantId: string;
+  /** Audit hook — skills emit events via this. */
+  audit: AuditEmitter;
+}
+
+// Concrete I/O for built-in skills
+export interface TriageInput {
+  message: string;
+  history: Message[];
+  knownIntents: string[];
+}
+export interface TriageOutput {
+  intent: string;
+  journeyId?: string;
+  specialistId?: string;
+  subAgent: SubAgentName;
+  confidence: number;
+  rationale?: string;
+}
+
+export interface RetrieveInput {
+  query: string;
+  topK?: number;
+  filters?: Record<string, string>;
+}
+export interface RetrievePassage {
+  source: string;
+  title: string;
+  content: string;
+  score: number;
+}
+export interface RetrieveOutput {
+  passages: RetrievePassage[];
+}
+
+export interface ExtractSlotInput {
+  message: string;
+  slotSchema: Record<string, { type: "string" | "number" | "boolean"; description: string }>;
+}
+export interface ExtractSlotOutput {
+  slots: Record<string, string | number | boolean>;
+}
+
+export interface RespondInput {
+  systemPrompt: string;
+  userMessage: string;
+  history: Message[];
+  passages?: RetrievePassage[];
+  variables?: Record<string, string>;
+}
+export interface RespondOutput {
+  content: string;
+  citations?: string[];
+}
+
+export interface ConfirmInput {
+  proposedAction: { tool: string; params: Record<string, unknown> };
+  summary: string;
+}
+export interface ConfirmOutput {
+  prompt: string;
+  pendingActionId: string;
+}
+
+export interface ActInput {
+  tool: string;
+  params: Record<string, unknown>;
+}
+export interface ActOutput {
+  result: unknown;
+  ok: boolean;
+}
+
+export interface SummarizeInput {
+  history: Message[];
+  maxTokens?: number;
+}
+export interface SummarizeOutput {
+  summary: string;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Profiles (LLM personas with system prompt)
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface Profile {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  tier: ModelTier;
+  /** Optional JSON output schema for structured calls. */
+  outputSchema?: Record<string, unknown>;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Memory
+// ────────────────────────────────────────────────────────────────────────────
+
+export type MemoryLayer = "ephemeral" | "profile" | "history" | "knowledge";
+
+export interface MemoryQuery {
+  conversationId: string;
+  customerId?: string;
+  topics?: string[];
+  layers?: MemoryLayer[];
+}
+
+export interface MemoryContext {
+  ephemeral: Record<string, unknown>;
+  profile?: { id: string; name?: string; email?: string; tier?: string };
+  history: Message[];
+  knowledge: RetrievePassage[];
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Policy
+// ────────────────────────────────────────────────────────────────────────────
+
+export type PolicyDecision =
+  | { decision: "allow" }
+  | { decision: "deny"; reason: string }
+  | { decision: "require_approval"; reason: string; approver?: string };
+
+export interface PolicyCheckSlotInput {
+  journeyId: string;
+  slotName: string;
+  value: string | number | boolean;
+  variables: Record<string, string>;
+}
+
+export interface PolicyCheckToolInput {
+  tool: string;
+  params: Record<string, unknown>;
+  variables: Record<string, string>;
+}
+
+export interface PolicyCheckResponseInput {
+  content: string;
+  citations?: string[];
+  variables: Record<string, string>;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Audit
+// ────────────────────────────────────────────────────────────────────────────
+
+export type AuditEventType =
+  | "turn_start"
+  | "turn_end"
+  | "route_decision"
+  | "slot_write"
+  | "tool_call"
+  | "policy_event"
+  | "journey_transition"
+  | "supervisor_check";
+
+export interface AuditEvent {
+  id: string;
+  conversationId: string;
+  tenantId: string;
+  ts: string;
+  type: AuditEventType;
+  payload: Record<string, unknown>;
+}
+
+export interface AuditEmitter {
+  emit(type: AuditEventType, payload: Record<string, unknown>): Promise<void>;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sub-agents
+// ────────────────────────────────────────────────────────────────────────────
+
+export type SubAgentName = "rag" | "workflow" | "tool" | "escalation";
+
+export interface SubAgentRunInput {
+  message: string;
+  triage: TriageOutput;
+  context: MemoryContext;
+  variables: Record<string, string>;
+}
+
+export interface SubAgentRunOutput {
+  response: string;
+  variables: Record<string, string>;
+  toolCalls?: Array<{ tool: string; params: Record<string, unknown>; result: unknown }>;
+  citations?: string[];
+  done: boolean;
+  actions: Array<{ type: string; payload: Record<string, unknown> }>;
+  /** If a confirmation gate is open, the action is pending until next turn. */
+  pendingAction?: { id: string; tool: string; params: Record<string, unknown> };
+}
+
+export interface SubAgent {
+  readonly name: SubAgentName;
+  canHandle(triage: TriageOutput): boolean;
+  run(input: SubAgentRunInput, ctx: SkillContext): Promise<SubAgentRunOutput>;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Supervisor
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface SupervisorCheckInput {
+  response: string;
+  citations?: string[];
+  passages?: RetrievePassage[];
+  variables: Record<string, string>;
+}
+
+export interface SupervisorCheckOutput {
+  pass: boolean;
+  issues: Array<{ kind: "pii" | "off_topic" | "ungrounded" | "tone" | "policy"; detail: string }>;
+  rewrittenContent?: string;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Orchestrator turn
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface OrchestratorTurnInput {
+  conversationId: string;
+  tenantId: string;
+  customerId?: string;
+  message: string;
+  /** Existing dialog state (slots, journey position) if any. */
+  variables?: Record<string, string>;
+}
+
+export interface OrchestratorTurnOutput {
+  response: string;
+  subAgent: SubAgentName;
+  intent: string;
+  variables: Record<string, string>;
+  toolCalls?: Array<{ tool: string; params: Record<string, unknown>; result: unknown }>;
+  citations?: string[];
+  supervisor: SupervisorCheckOutput;
+  done: boolean;
+  actions: Array<{ type: string; payload: Record<string, unknown> }>;
+}
