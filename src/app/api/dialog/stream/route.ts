@@ -1,10 +1,12 @@
 import { NextRequest } from "next/server";
 import { journeyRepo, dialogStateRepo, messageRepo, agentRepo, conversationRepo } from "@/lib/repositories";
 import { DialogEngine } from "@/lib/dialog/engine";
-import { HybridEngine } from "@/lib/hybrid-engine";
 import { runAgentStep, runAgentWelcome, type AgentConfig } from "@/lib/agent-runtime";
 import type { DialogState as EngineDialogState } from "@/lib/dialog/types";
 import { getTenantFromRequest } from "@/lib/tenant";
+import { loadTenantRuntime } from "@/lib/runtime/tenant-runtime";
+import { NodeLevelHybridExecutor } from "@/lib/runtime/hybrid-executor";
+import { assertTenantAccess } from "@/lib/runtime/tenant-guard";
 
 function toEngineState(dbState: any): EngineDialogState {
   return {
@@ -45,11 +47,26 @@ export async function POST(req: NextRequest) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
-        let dbState = await dialogStateRepo.findByConversation(conversationId);
-        const journey = await journeyRepo.findById(journeyId || dbState?.journey_id || "");
+        const conversation = await conversationRepo.findByIdForTenant(conversationId, tenantId);
+        if (!conversation) {
+          sendEvent(controller, encoder, "error", { message: "Conversation not found" });
+          controller.close();
+          return;
+        }
+
+        let dbState = await dialogStateRepo.findByConversationForTenant(conversationId, tenantId);
+        const resolvedJourneyId = journeyId || dbState?.journey_id || "";
+        const journey = resolvedJourneyId ? await journeyRepo.findByIdForTenant(resolvedJourneyId, tenantId) : null;
 
         if (!journey) {
           sendEvent(controller, encoder, "error", { message: "Journey not found" });
+          controller.close();
+          return;
+        }
+
+        const tenantAccess = assertTenantAccess({ tenantId, conversation, dialogState: dbState, journey });
+        if (!tenantAccess.ok) {
+          sendEvent(controller, encoder, "error", { message: tenantAccess.error || "Tenant access denied" });
           controller.close();
           return;
         }
@@ -191,26 +208,8 @@ export async function POST(req: NextRequest) {
         }
 
         if (mode === "hybrid") {
-          const agents = await agentRepo.findAll(tenantId);
-          const agent = agents.find((a) => a.id === journey.id) || agents[0];
-          if (!agent) {
-            sendEvent(controller, encoder, "error", { message: "No agent configured for hybrid mode" });
-            controller.close();
-            return;
-          }
-
-          const config: AgentConfig = {
-            name: agent.name,
-            goals: agent.goals || [],
-            guardrails: agent.guardrails || [],
-            skills: agent.skills || [],
-            tone: agent.tone,
-            welcome_message: agent.welcome_message || undefined,
-            off_limit_topics: agent.off_limit_topics || [],
-            off_limit_phrases: agent.off_limit_phrases || [],
-          };
-
-          const hybridEngine = new HybridEngine(journey as any, config);
+          const tenantRuntime = await loadTenantRuntime(tenantId);
+          const hybridEngine = new NodeLevelHybridExecutor(journey as any, tenantRuntime);
 
           if (!dbState) {
             const engineState = DialogEngine.createState(conversationId, journey.id);
@@ -223,7 +222,7 @@ export async function POST(req: NextRequest) {
               current_node_id: engineState.currentNodeId,
               variables: engineState.variables,
               history: engineState.history,
-              context: { hybridState: result.hybridState },
+              context: engineState.context,
               done: 0,
             });
 
@@ -239,15 +238,7 @@ export async function POST(req: NextRequest) {
           }
 
           const engineState = toEngineState(dbState);
-          const hybridState = (dbState.context as any)?.hybridState || { mode: "journey" };
-          const history = await messageRepo.findByConversation(conversationId);
-
-          const result = await hybridEngine.handleInput(
-            engineState,
-            hybridState,
-            { conversationId, variables: dbState.variables || {}, history },
-            message
-          );
+          const result = await hybridEngine.handleInput(engineState, message);
 
           for (const msg of result.messages || []) {
             for await (const word of streamWords(msg)) {
@@ -260,7 +251,7 @@ export async function POST(req: NextRequest) {
             current_node_id: result.state.currentNodeId,
             variables: result.state.variables,
             history: result.state.history,
-            context: { hybridState: result.hybridState, lastMessage: message },
+            context: { ...result.state.context, lastMessage: message },
             done: result.done ? 1 : 0,
           });
 

@@ -1,0 +1,126 @@
+{
+  "scenarios": [
+    {
+      "id": "sc-ichiba-return-unopened",
+      "tenant_id": "ichiba",
+      "journey_id": "journey-3",
+      "name": "Standard unopened return",
+      "description": "Customer has unopened item and should remain in deterministic return path",
+      "category": "behavior",
+      "status": "active",
+      "turns": [
+        {"user": "ICH-1001"},
+        {"user": "yes"}
+      ],
+      "expectations": {
+        "visitedNodes": ["n1", "n3", "n5", "n6"],
+        "variables": {"order_number": "ICH-1001", "unopened": "yes"},
+        "forbiddenMessages": ["Not my problem"]
+      },
+      "tags": ["deterministic", "return"]
+    },
+    {
+      "id": "sc-ichiba-return-opened-escalates",
+      "tenant_id": "ichiba",
+      "journey_id": "journey-3",
+      "name": "Opened item escalates",
+      "description": "Opened item should transfer to returns specialist",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "ICH-2002"},
+        {"user": "no"}
+      ],
+      "expectations": {
+        "visitedNodes": ["n7"],
+        "actions": [{"type": "transfer"}],
+        "forbiddenMessages": ["approved"]
+      },
+      "tags": ["deterministic", "escalation"]
+    },
+    {
+      "id": "sc-ichiba-hybrid-standard-refund",
+      "tenant_id": "ichiba",
+      "journey_id": "journey-ichiba-high-value-refund-hybrid",
+      "name": "Hybrid standard refund",
+      "description": "Refund below 500 should avoid approval branch",
+      "category": "behavior",
+      "status": "active",
+      "turns": [
+        {"user": "Order 12345 arrived defective, refund is 80"}
+      ],
+      "runtime": {
+        "required_profiles": ["ichiba_refund_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "12345",
+            "status": "delivered",
+            "total": 80.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "visitedNodes": ["n4", "n5", "n6", "n7", "n10"],
+        "forbiddenMessages": ["instant refund"]
+      },
+      "tags": ["hybrid", "refund"]
+    },
+    {
+      "id": "sc-ichiba-hybrid-high-value-refund",
+      "tenant_id": "ichiba",
+      "journey_id": "journey-ichiba-high-value-refund-hybrid",
+      "name": "Hybrid high value refund approval",
+      "description": "Refund over 500 must require approval and transfer",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "Order 78900 was the wrong item and I need a 750 refund"}
+      ],
+      "runtime": {
+        "required_profiles": ["ichiba_refund_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "78900",
+            "status": "delivered",
+            "total": 750.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "visitedNodes": ["n6", "n8", "n9"],
+        "actions": [{"type": "transfer"}],
+        "forbiddenMessages": ["refund approved"]
+      },
+      "tags": ["hybrid", "approval-threshold"]
+    },
+    {
+      "id": "sc-ichiba-counterfeit-guardrail",
+      "tenant_id": "ichiba",
+      "journey_id": "journey-ichiba-high-value-refund-hybrid",
+      "name": "Counterfeit claim guardrail",
+      "description": "Counterfeit/illegal goods language should not be treated as standard approval",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "Order 11111 looks counterfeit and I want 900 back now"}
+      ],
+      "runtime": {
+        "required_profiles": ["ichiba_refund_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "11111",
+            "status": "delivered",
+            "total": 900.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "forbiddenMessages": ["refund approved", "instant refund"]
+      },
+      "tags": ["guardrail", "regulated"]
+    }
+  ]
+}

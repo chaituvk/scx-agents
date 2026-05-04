@@ -35,6 +35,12 @@ class JourneyRepo extends Repository<Journey> {
     return journey;
   }
 
+  async findByIdForTenant(id: string, tenantId: string): Promise<Journey | null> {
+    const row = await getOne("SELECT * FROM journeys WHERE id = $1 AND tenant_id = $2", [id, tenantId]);
+    if (!row) return null;
+    return this.parseJsonFields(row, JSON_FIELDS) as Journey;
+  }
+
   async findAll(tenantId?: string): Promise<Journey[]> {
     const cacheKey = tenantId ? this.listCacheKey(`tenant:${tenantId}`) : this.listCacheKey();
     const cached = await this.cache.get<Journey[]>(cacheKey);

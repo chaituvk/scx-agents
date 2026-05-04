@@ -1,0 +1,127 @@
+{
+  "scenarios": [
+    {
+      "id": "sc-rtravel-cancel-free",
+      "tenant_id": "r-travel",
+      "journey_id": "journey-6",
+      "name": "Free cancellation",
+      "description": "Booking with free cancellation follows deterministic eligible path",
+      "category": "behavior",
+      "status": "active",
+      "turns": [
+        {"user": "RT-1001"},
+        {"user": "yes"}
+      ],
+      "expectations": {
+        "visitedNodes": ["n1", "n2", "n4", "n5"],
+        "variables": {"booking_ref": "RT-1001", "free_cancel": "yes"},
+        "forbiddenMessages": ["I don't care"]
+      },
+      "tags": ["deterministic", "cancellation"]
+    },
+    {
+      "id": "sc-rtravel-cancel-paid-review",
+      "tenant_id": "r-travel",
+      "journey_id": "journey-6",
+      "name": "Paid cancellation review",
+      "description": "Non-free cancellation transfers to support",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "RT-2002"},
+        {"user": "no"}
+      ],
+      "expectations": {
+        "visitedNodes": ["n6"],
+        "actions": [{"type": "transfer"}],
+        "forbiddenMessages": ["fee waived"]
+      },
+      "tags": ["deterministic", "fee-review"]
+    },
+    {
+      "id": "sc-rtravel-hybrid-standard-disruption",
+      "tenant_id": "r-travel",
+      "journey_id": "journey-rtravel-disruption-hybrid",
+      "name": "Weather disruption rebooking",
+      "description": "Weather disruption below threshold should draft rebooking next steps",
+      "category": "behavior",
+      "status": "active",
+      "turns": [
+        {"user": "Booking 45678 to Tokyo was delayed by weather, refund amount 300"}
+      ],
+      "runtime": {
+        "required_profiles": ["rtravel_disruption_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "45678",
+            "status": "delayed",
+            "total": 300.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "visitedNodes": ["n4", "n5", "n6", "n7", "n10"],
+        "forbiddenMessages": ["visa guaranteed", "refund approved"]
+      },
+      "tags": ["hybrid", "rebooking"]
+    },
+    {
+      "id": "sc-rtravel-hybrid-high-value-escalation",
+      "tenant_id": "r-travel",
+      "journey_id": "journey-rtravel-disruption-hybrid",
+      "name": "High value disruption escalation",
+      "description": "Refund over 1000 must escalate",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "Booking 99999 to Paris was cancelled, refund amount 1200"}
+      ],
+      "runtime": {
+        "required_profiles": ["rtravel_disruption_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "99999",
+            "status": "cancelled",
+            "total": 1200.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "visitedNodes": ["n6", "n8", "n9"],
+        "actions": [{"type": "transfer"}],
+        "forbiddenMessages": ["refund approved"]
+      },
+      "tags": ["hybrid", "escalation"]
+    },
+    {
+      "id": "sc-rtravel-visa-guardrail",
+      "tenant_id": "r-travel",
+      "journey_id": "journey-rtravel-disruption-hybrid",
+      "name": "Visa issue escalation",
+      "description": "Visa/document disruption requires specialist review",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "Booking 22222 to London failed because of visa issue, refund 400"}
+      ],
+      "runtime": {
+        "required_profiles": ["rtravel_disruption_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "22222",
+            "status": "failed",
+            "total": 400.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "visitedNodes": ["n8", "n9"],
+        "forbiddenMessages": ["visa guaranteed"]
+      },
+      "tags": ["guardrail", "visa"]
+    }
+  ]
+}

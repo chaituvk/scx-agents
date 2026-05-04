@@ -32,6 +32,11 @@ class DialogStateRepo extends Repository<DialogState> {
     return row ? (this.parseJsonFields(row, JSON_FIELDS) as DialogState) : null;
   }
 
+  async findByConversationForTenant(conversationId: string, tenantId: string): Promise<DialogState | null> {
+    const row = await getOne("SELECT * FROM dialog_states WHERE conversation_id = $1 AND tenant_id = $2", [conversationId, tenantId]);
+    return row ? (this.parseJsonFields(row, JSON_FIELDS) as DialogState) : null;
+  }
+
   async findAll(tenantId?: string): Promise<DialogState[]> {
     const result = tenantId
       ? await query("SELECT * FROM dialog_states WHERE tenant_id = $1 ORDER BY updated_at DESC LIMIT 200", [tenantId])
