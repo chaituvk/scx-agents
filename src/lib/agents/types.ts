@@ -213,7 +213,8 @@ export type AuditEventType =
   | "policy_event"
   | "journey_transition"
   | "supervisor_check"
-  | "escalation_handoff";
+  | "escalation_handoff"
+  | "approval_decision";
 
 export interface AuditEvent {
   id: string;
@@ -302,6 +303,33 @@ export interface SubAgentRunOutput {
   actions: Array<{ type: string; payload: Record<string, unknown> }>;
   /** If a confirmation gate is open, the action is pending until next turn. */
   pendingAction?: { id: string; tool: string; params: Record<string, unknown> };
+  /**
+   * Set when a journey-level policy_check returned require_approval. The
+   * conversation is suspended — the next user turn is short-circuited by
+   * the orchestrator until POST /api/orchestrator/approve clears it.
+   */
+  pendingApproval?: PendingApproval;
+}
+
+/**
+ * Approval pause record. Persisted to dialog_states.pending_approval and
+ * mirrored on SubAgentRunOutput / OrchestratorTurnOutput when a turn ends
+ * in a held state.
+ */
+export interface PendingApproval {
+  id: string;
+  journeyId: string;
+  /** Node where execution paused — the policy_check node itself. */
+  nodeId: string;
+  /** Runtime profile the policy_check ran against, when available. */
+  profile?: string;
+  /** Policy id from the runtime decision, if the rule named one. */
+  policyId?: string;
+  /** Human-readable reason from the runtime decision. */
+  reason?: string;
+  /** The user message that triggered the pause, for approver context. */
+  triggeringMessage?: string;
+  createdAt: string;
 }
 
 export interface SubAgent {
@@ -358,4 +386,6 @@ export interface OrchestratorTurnOutput {
   supervisor: SupervisorCheckOutput;
   done: boolean;
   actions: Array<{ type: string; payload: Record<string, unknown> }>;
+  /** Mirrored from SubAgentRunOutput when the turn ended in a held state. */
+  pendingApproval?: PendingApproval;
 }

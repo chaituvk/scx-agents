@@ -110,6 +110,30 @@ async function main() {
     assert.strictEqual(status, 400);
   });
 
+  await test("approve endpoint validates required fields", async () => {
+    const noConv = await post("/api/orchestrator/approve", { decision: "approve", approverId: "u1" });
+    assert.strictEqual(noConv.status, 400);
+
+    const badDecision = await post("/api/orchestrator/approve", {
+      conversationId: "c1", decision: "yes", approverId: "u1",
+    });
+    assert.strictEqual(badDecision.status, 400);
+
+    const noApprover = await post("/api/orchestrator/approve", {
+      conversationId: "c1", decision: "approve",
+    });
+    assert.strictEqual(noApprover.status, 400);
+  });
+
+  await test("approve endpoint returns 404 when no pending approval", async () => {
+    const conversationId = `smoke-noapproval-${Date.now()}`;
+    const { status, data } = await post("/api/orchestrator/approve", {
+      conversationId, decision: "approve", approverId: "supervisor-1",
+    });
+    assert.strictEqual(status, 404);
+    assert.ok(/no pending approval/i.test(data.error ?? ""));
+  });
+
   await test("missing message is rejected", async () => {
     const { status } = await post("/api/orchestrator", { conversationId: "x" });
     assert.strictEqual(status, 400);

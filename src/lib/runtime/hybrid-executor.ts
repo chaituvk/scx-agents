@@ -294,15 +294,30 @@ export class NodeLevelHybridExecutor {
     const profile = String(node.data.profile || "");
     const decision = checkRuntimeProfile(this.runtime, profile, { journeyId: this.journey.id, variables: state.variables });
     state.context.lastPolicyDecision = decision;
+
     if (decision.effect === "require_approval") {
+      // Pause execution. The journey stays parked on this node — workflow-agent
+      // persists pending_approval and the orchestrator short-circuits new
+      // turns until POST /api/orchestrator/approve resumes (advances past
+      // this node) or rejects (sets approval_denied).
       state.variables.approval_required = "true";
+      return {
+        messages: decision.reason ? [decision.reason] : ["This step requires supervisor approval."],
+        actions: [{
+          type: "policy_decision",
+          payload: decisionPayload(decision, { profile, paused: true, nodeId: node.id }),
+        }],
+        done: false,
+        wait: true,
+      };
     }
+
     if (decision.effect === "escalate") {
       state.variables.escalation_required = "true";
     }
     return {
       messages: decision.reason ? [decision.reason] : [],
-      actions: decision.effect === "allow" ? [] : [{ type: "policy_decision", payload: decisionPayload(decision) }],
+      actions: decision.effect === "allow" ? [] : [{ type: "policy_decision", payload: decisionPayload(decision, { profile, nodeId: node.id }) }],
       done: false,
       wait: false,
     };

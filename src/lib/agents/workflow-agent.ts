@@ -33,6 +33,7 @@ import type {
   SubAgentRunOutput,
   SkillContext,
   TriageOutput,
+  PendingApproval,
 } from "./types";
 
 const NO_WORKFLOW =
@@ -161,6 +162,69 @@ export const workflowAgent: SubAgent = {
         ? engine.handleInput(state, input.message)
         : engine.start(state);
       result = fromDialogResult(state, dResult);
+    }
+
+    // Detect a hybrid-executor pause from a policy_check node returning
+    // require_approval. The action carries paused:true + the node id; we
+    // build a PendingApproval, persist it to dialog_states, and return
+    // early. result.done is false from the executor because it's parked,
+    // not finished — the orchestrator's pre-turn check uses pending_approval
+    // (not done) to short-circuit subsequent user turns.
+    const heldAction = result.actions.find((a) =>
+      a.type === "policy_decision" &&
+      (a.payload as { effect?: string; paused?: boolean } | undefined)?.effect === "require_approval" &&
+      (a.payload as { paused?: boolean } | undefined)?.paused === true
+    );
+    if (heldAction) {
+      const payload = (heldAction.payload ?? {}) as {
+        profile?: string; policyId?: string; reason?: string; nodeId?: string;
+      };
+      const pendingApproval: PendingApproval = {
+        id: `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        journeyId: journey.id,
+        nodeId: payload.nodeId ?? result.state.currentNodeId ?? "",
+        profile: payload.profile,
+        policyId: payload.policyId,
+        reason: payload.reason,
+        triggeringMessage: input.message,
+        createdAt: new Date().toISOString(),
+      };
+
+      await ctx.audit.emit("policy_event", {
+        decision: "require_approval",
+        target: `policy_check:${pendingApproval.nodeId}`,
+        reason: pendingApproval.reason,
+      });
+
+      try {
+        await dialogStateRepo.upsertByConversationForTenant(ctx.tenantId, ctx.conversationId, {
+          journey_id: journey.id,
+          current_node_id: result.state.currentNodeId,
+          variables: result.state.variables,
+          history: result.state.history,
+          context: result.state.context,
+          pending_approval: pendingApproval as unknown as Record<string, unknown>,
+          done: 0,
+        });
+      } catch (err) {
+        console.error("[workflowAgent] pending_approval persistence failed:", err);
+        await ctx.audit.emit("policy_event", {
+          decision: "deny", target: "persistence",
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      const heldMessage =
+        result.messages.join("\n").trim() ||
+        "This step requires supervisor approval before I can continue.";
+
+      return {
+        response: heldMessage,
+        variables: result.state.variables,
+        done: false,
+        actions: [],
+        pendingApproval,
+      };
     }
 
     const slotMetadata = indexSlotMetadata(result.actions);

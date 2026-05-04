@@ -19,7 +19,9 @@ import { loadTenantRuntime } from "../runtime/tenant-runtime";
 import type {
   OrchestratorTurnInput,
   OrchestratorTurnOutput,
+  PendingApproval,
   SkillContext,
+  SupervisorCheckOutput,
   TopicFrame,
   TriageOutput,
   SubAgentName,
@@ -46,6 +48,7 @@ interface SessionSnapshot {
   activeAgent: SubAgentName | null;
   lastIntent: string | null;
   topicStack: TopicFrame[];
+  pendingApproval: PendingApproval | null;
 }
 
 async function loadSession(tenantId: string, conversationId: string): Promise<SessionSnapshot> {
@@ -53,7 +56,7 @@ async function loadSession(tenantId: string, conversationId: string): Promise<Se
   if (!row) {
     return {
       activeJourneyId: null, currentNodeId: null, activeAgent: null,
-      lastIntent: null, topicStack: [],
+      lastIntent: null, topicStack: [], pendingApproval: null,
     };
   }
   return {
@@ -62,6 +65,9 @@ async function loadSession(tenantId: string, conversationId: string): Promise<Se
     activeAgent: (row.active_agent as SubAgentName | null | undefined) ?? null,
     lastIntent: row.last_intent ?? null,
     topicStack: Array.isArray(row.topic_stack) ? (row.topic_stack as TopicFrame[]) : [],
+    pendingApproval: row.pending_approval && typeof row.pending_approval === "object"
+      ? (row.pending_approval as unknown as PendingApproval)
+      : null,
   };
 }
 
@@ -134,6 +140,35 @@ export class Orchestrator {
       loadSession(input.tenantId, input.conversationId),
       loadIntentMap(input.tenantId),
     ]);
+
+    // 1b. Pending-approval gate (Stage 7). When a prior turn paused on a
+    // policy_check, the conversation is suspended until POST
+    // /api/orchestrator/approve clears dialog_states.pending_approval.
+    // Hint-driven turns (forceSubAgent / requestedJourneyId) bypass the
+    // gate so /api/orchestrator/approve can drive a synthetic resume turn.
+    if (session.pendingApproval && !input.forceSubAgent && !input.requestedJourneyId) {
+      await audit.emit("policy_event", {
+        decision: "deny", target: "turn",
+        reason: `held_for_approval:${session.pendingApproval.id}`,
+      });
+      const heldResponse =
+        "This conversation is awaiting supervisor approval — I'll continue once it's cleared.";
+      const supervisor: SupervisorCheckOutput = { pass: true, issues: [] };
+      await audit.emit("turn_end", {
+        subAgent: session.activeAgent ?? "workflow",
+        done: false, supervisorPass: true, heldForApproval: true,
+      });
+      return {
+        response: heldResponse,
+        subAgent: session.activeAgent ?? "workflow",
+        intent: "held_for_approval",
+        variables: input.variables ?? {},
+        supervisor,
+        done: false,
+        actions: [],
+        pendingApproval: session.pendingApproval,
+      };
+    }
 
     // 2. Triage — session-aware, intent-mapped via router profile.
     //    Hint path: skipped when caller supplies forceSubAgent or
@@ -243,6 +278,7 @@ export class Orchestrator {
       supervisor,
       done: subOut.done,
       actions: subOut.actions,
+      pendingApproval: subOut.pendingApproval,
     };
   }
 }
