@@ -50,6 +50,23 @@ export interface TriageInput {
   message: string;
   history: Message[];
   knownIntents: string[];
+  /**
+   * Session context — when a workflow is already active, triage should
+   * default to continuing it unless the user clearly switches topic.
+   */
+  session?: {
+    activeJourneyId?: string | null;
+    currentNodeId?: string | null;
+    activeAgent?: SubAgentName | null;
+    lastIntent?: string | null;
+    topicStackDepth?: number;
+  };
+  /**
+   * Tenant intent → journey map (from router runtime profile config.intents).
+   * When triage classifies an intent that has a mapped journey, the orchestrator
+   * routes there directly. Empty for tenants without a router profile.
+   */
+  intentMap?: Record<string, string>;
 }
 export interface TriageOutput {
   intent: string;
