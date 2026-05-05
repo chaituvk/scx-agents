@@ -79,7 +79,7 @@ async function main() {
     );
   });
 
-  await test("escalation phrase routes to Escalation", async () => {
+  await test("escalation phrase routes to Escalation with rich handoff payload", async () => {
     const conversationId = `smoke-esc-${Date.now()}`;
     const { status, data } = await post("/api/orchestrator", {
       conversationId,
@@ -87,10 +87,17 @@ async function main() {
     });
     assert.strictEqual(status, 200);
     assertSubAgent(data, "escalation");
-    assert.ok(
-      data.actions?.some((a) => a.type === "transfer"),
-      "expected a transfer action"
-    );
+    const transfer = data.actions?.find((a) => a.type === "transfer");
+    assert.ok(transfer, "expected a transfer action");
+    const payload = transfer.payload ?? {};
+    assert.strictEqual(payload.conversationId, conversationId);
+    assert.strictEqual(payload.tenantId, TENANT);
+    assert.ok(typeof payload.summary === "string");
+    assert.ok(Array.isArray(payload.recentTranscript));
+    assert.ok(Array.isArray(payload.recentPolicyEvents));
+    assert.ok(Array.isArray(payload.topicStack));
+    assert.ok(typeof payload.createdAt === "string");
+    assert.strictEqual(payload.triggeringMessage, "Please connect me to a human agent");
   });
 
   await test("smalltalk routes to General", async () => {

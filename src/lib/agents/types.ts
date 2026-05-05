@@ -312,6 +312,50 @@ export interface SubAgentRunOutput {
 }
 
 /**
+ * Live-chat handoff context (Stage 9). Built by escalation-agent on
+ * transfer, persisted to dialog_states.handoff_state, and surfaced both
+ * as the transfer action's payload and the escalation_handoff audit
+ * event payload — so a live agent dashboard / Slack webhook / on-call
+ * paging integration can reconstruct the full state without re-querying.
+ */
+export interface HandoffContext {
+  conversationId: string;
+  tenantId: string;
+  customerId?: string;
+  customerProfile?: { id: string; name?: string; email?: string; tier?: string };
+
+  /** Triage intent that caused the handoff (e.g. "escalate", "policy_block"). */
+  reason: string;
+  /** The user message that triggered the escalation. */
+  triggeringMessage: string;
+
+  /** Free-text summary of the conversation so far. */
+  summary: string;
+  /** Last few turns verbatim — live agents prefer exact words. */
+  recentTranscript: Array<{ role: string; content: string }>;
+
+  /** Where the workflow was, when it was active. */
+  activeJourneyId?: string;
+  currentNodeId?: string;
+  /** Slot values collected during the conversation. */
+  variables: Record<string, string>;
+  /** Paused topics (from session-aware router, Stage 5). */
+  topicStack: TopicFrame[];
+  /** If the conversation was held for approval (Stage 7), the lock. */
+  pendingApproval?: PendingApproval;
+
+  /** Recent policy decisions (deny / require_approval) for risk context. */
+  recentPolicyEvents: Array<{
+    ts: string;
+    decision: string;
+    target?: string;
+    reason?: string;
+  }>;
+
+  createdAt: string;
+}
+
+/**
  * Approval pause record. Persisted to dialog_states.pending_approval and
  * mirrored on SubAgentRunOutput / OrchestratorTurnOutput when a turn ends
  * in a held state.
