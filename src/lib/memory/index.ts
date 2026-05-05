@@ -41,7 +41,7 @@ export class MemoryService {
           ? history[history.length - 1].content
           : "";
       if (topicQuery) {
-        knowledge = await loadKnowledge(topicQuery);
+        knowledge = await loadKnowledge(topicQuery, query.tenantId);
       }
     }
 
