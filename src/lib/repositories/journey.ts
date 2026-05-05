@@ -35,10 +35,16 @@ class JourneyRepo extends Repository<Journey> {
     return journey;
   }
 
+  // Hot path: workflow-agent calls this every turn that resolves a
+  // specific journey. Delegate to findById's cache (same row), then
+  // enforce the tenant filter post-fetch so we don't double-cache the
+  // same row under two keys. Returns null when the cached journey is
+  // owned by a different tenant.
   async findByIdForTenant(id: string, tenantId: string): Promise<Journey | null> {
-    const row = await getOne("SELECT * FROM journeys WHERE id = $1 AND tenant_id = $2", [id, tenantId]);
-    if (!row) return null;
-    return this.parseJsonFields(row, JSON_FIELDS) as Journey;
+    const journey = await this.findById(id);
+    if (!journey) return null;
+    if (journey.tenant_id && journey.tenant_id !== tenantId) return null;
+    return journey;
   }
 
   async findAll(tenantId?: string): Promise<Journey[]> {

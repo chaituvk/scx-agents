@@ -18,23 +18,42 @@ class RuntimeProfileRepo extends Repository<StoredRuntimeProfile> {
   }
 
   async findById(id: string): Promise<StoredRuntimeProfile | null> {
+    const cached = await this.cache.get<StoredRuntimeProfile>(this.cacheKey(id));
+    if (cached) return cached;
     const row = await getOne("SELECT * FROM runtime_profiles WHERE id = $1", [id]);
-    return row ? (this.parseJsonFields(row, JSON_FIELDS) as StoredRuntimeProfile) : null;
+    if (!row) return null;
+    const profile = this.parseJsonFields(row, JSON_FIELDS) as StoredRuntimeProfile;
+    await this.cache.set(this.cacheKey(id), profile, this.cacheTtl);
+    return profile;
   }
 
   async findAll(tenantId?: string): Promise<StoredRuntimeProfile[]> {
+    const cacheKey = tenantId ? this.listCacheKey(`tenant:${tenantId}`) : this.listCacheKey();
+    const cached = await this.cache.get<StoredRuntimeProfile[]>(cacheKey);
+    if (cached) return cached;
     const result = tenantId
       ? await query("SELECT * FROM runtime_profiles WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 500", [tenantId])
       : await query("SELECT * FROM runtime_profiles ORDER BY created_at DESC LIMIT 500");
-    return result.rows.map((r) => this.parseJsonFields(r, JSON_FIELDS)) as StoredRuntimeProfile[];
+    const profiles = result.rows.map((r) => this.parseJsonFields(r, JSON_FIELDS)) as StoredRuntimeProfile[];
+    await this.cache.set(cacheKey, profiles, this.cacheTtl);
+    return profiles;
   }
 
+  // Hot path: orchestrator's loadTenantRuntime calls this on every turn,
+  // and workflow-agent calls it again on every workflow turn. Cache key
+  // sits under the :list: prefix so the base Repository.invalidate()
+  // (called from create/update/delete) clears it via delPattern.
   async findActiveByTenant(tenantId: string): Promise<StoredRuntimeProfile[]> {
+    const cacheKey = this.listCacheKey(`active:tenant:${tenantId}`);
+    const cached = await this.cache.get<StoredRuntimeProfile[]>(cacheKey);
+    if (cached) return cached;
     const result = await query(
       "SELECT * FROM runtime_profiles WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT 500",
       [tenantId, "active"]
     );
-    return result.rows.map((r) => this.parseJsonFields(r, JSON_FIELDS)) as StoredRuntimeProfile[];
+    const profiles = result.rows.map((r) => this.parseJsonFields(r, JSON_FIELDS)) as StoredRuntimeProfile[];
+    await this.cache.set(cacheKey, profiles, this.cacheTtl);
+    return profiles;
   }
 
   async create(data: Omit<StoredRuntimeProfile, "id" | "created_at" | "updated_at"> & { id?: string }): Promise<StoredRuntimeProfile> {

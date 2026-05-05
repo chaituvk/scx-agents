@@ -9,10 +9,22 @@ let usePostgres = false;
 
 const pgUrl = process.env.DATABASE_URL || "postgresql://sierra:sierra2026@localhost:5432/sierra";
 
+// Pool sizing (Stage 12): default 50 to comfortably support ~100 tenants
+// with light concurrent traffic on a single Next.js node. Override via
+// DB_POOL_MAX. idleTimeoutMillis intentionally short (30s) so idle
+// connections release back to Postgres rather than holding a slot per
+// tenant indefinitely.
+const poolMax = (() => {
+  const raw = process.env.DB_POOL_MAX;
+  if (!raw) return 50;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
+})();
+
 try {
   pgPool = new Pool({
     connectionString: pgUrl,
-    max: 20,
+    max: poolMax,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,
   });
