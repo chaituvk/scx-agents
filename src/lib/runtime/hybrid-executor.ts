@@ -1,11 +1,12 @@
 import { chat } from "@/lib/llm";
+import { retrieveKnowledge } from "@/lib/rag";
 import type { DialogAction, DialogResult } from "@/lib/dialog/engine";
 import type { DialogState, FlowEdge, FlowNode, Journey } from "@/lib/dialog/types";
 import type { ConditionExpression } from "@/lib/journey/schema";
 import { checkRuntimeProfile, executeProfileTool, type TenantRuntime } from "./tenant-runtime";
 import type { RuntimeDecision } from "./profiles";
 
-type Action = DialogAction | { type: "policy_decision" | "tool_result"; payload: Record<string, unknown> };
+type Action = DialogAction | { type: "policy_decision" | "tool_result" | "knowledge_used"; payload: Record<string, unknown> };
 
 interface StepResult {
   messages: string[];
@@ -332,8 +333,50 @@ export class NodeLevelHybridExecutor {
 
     const instruction = String(node.data.instruction || "Draft a concise, compliant customer-facing response using the known variables.");
     const forbidden = asStringArray(node.data.must_not_claim || node.data.forbidden_claims);
+
+    // Stage 13: ground the draft in tenant-scoped RAG passages unless the
+    // node opts out via data.retrieve === false. Query order:
+    //   1) explicit data.retrieval_query (interpolated with variables)
+    //   2) the user's last message (typical chat flow)
+    //   3) the node's instruction (fallback when there's no user turn yet)
+    const retrieveEnabled = node.data.retrieve !== false;
+    const retrievalQueryRaw = String(
+      node.data.retrieval_query
+      || state.context.lastMessage
+      || instruction
+      || ""
+    );
+    const retrievalQuery = this.interpolate(retrievalQueryRaw, state.variables);
+    const topK = typeof node.data.retrieval_top_k === "number" ? node.data.retrieval_top_k : 3;
+
+    let passagesBlock = "";
+    let citations: string[] = [];
+    if (retrieveEnabled && retrievalQuery.trim().length > 0) {
+      try {
+        const docs = await retrieveKnowledge(retrievalQuery, topK, this.runtime.tenantId);
+        if (docs.length > 0) {
+          passagesBlock = `\nRELEVANT KNOWLEDGE (ground your draft in these and cite sources inline as [source]):\n${docs
+            .map((d) => `[${d.source}] ${d.title}: ${d.content}`)
+            .join("\n")}\n`;
+          citations = Array.from(new Set(docs.map((d) => d.source)));
+        }
+      } catch {
+        // Retrieval is best-effort. A miss falls back to the un-grounded
+        // draft path; the supervisor's groundedness check still applies.
+      }
+    }
+
+    const sysParts = [
+      "You are drafting a regulated customer-support response.",
+      `Avoid these claims: ${forbidden.join(", ") || "none"}.`,
+      passagesBlock
+        ? "Ground every factual claim in the provided passages and cite sources inline as [source]. If the passages don't cover the answer, say you'll check rather than inventing details."
+        : "",
+      "Keep it concise.",
+    ].filter(Boolean);
+
     const response = await chat([
-      { role: "system", content: `You are drafting a regulated customer-support response. Avoid these claims: ${forbidden.join(", ") || "none"}. Keep it concise.` },
+      { role: "system", content: sysParts.join(" ") + passagesBlock },
       { role: "user", content: `${instruction}\n\nVariables:\n${JSON.stringify(state.variables, null, 2)}\n\nLast user message: ${String(state.context.lastMessage || "")}` },
     ]);
     let text = response.model === "mock" ? String(node.data.fallback || "Thanks. I have the details I need and will continue with the next step.") : response.content.trim();
@@ -343,7 +386,11 @@ export class NodeLevelHybridExecutor {
         break;
       }
     }
-    return { messages: [text], actions: [], done: false, wait: false };
+
+    const actions: Action[] = citations.length > 0
+      ? [{ type: "knowledge_used", payload: { sources: citations, query: retrievalQuery } }]
+      : [];
+    return { messages: [text], actions, done: false, wait: false };
   }
 
   private mapToolOutput(outputMap: unknown, result: unknown, state: DialogState) {
