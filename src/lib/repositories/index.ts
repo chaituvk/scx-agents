@@ -14,3 +14,4 @@ export { simulationRunRepo, type SimulationRun } from "./simulation-run";
 export { auditEventRepo, type AuditEvent, type AuditEventType } from "./audit-event";
 export { journeyScenarioRepo, toJourneyScenario, type StoredJourneyScenario } from "./journey-scenario";
 export { runtimeProfileRepo, type StoredRuntimeProfile } from "./runtime-profile";
+export { tenantRepo, type Tenant } from "./tenant";
