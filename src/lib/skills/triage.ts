@@ -60,12 +60,17 @@ function keywordFallback(message: string, session?: TriageInput["session"]): Tri
     // Short wh-questions ("what?", "how come?") fall through to general.
     subAgent = "rag";
     intent = "knowledge_query";
+  } else if (/\b(lookup|check|status)\b/.test(m)) {
+    // Tool keywords fire before workflow keywords because read-only
+    // single-step lookups ("check my order status") are tool intents
+    // even when they mention a workflow noun ("order"). A genuine
+    // workflow trigger ("I need a refund for my order") has no
+    // tool keyword and falls through to the workflow branch below.
+    subAgent = "tool";
+    intent = "tool_use";
   } else if (/\b(return|refund|order|cancel|kyc)\b/.test(m)) {
     subAgent = "workflow";
     intent = "workflow";
-  } else if (/\b(lookup|check|status)\b/.test(m)) {
-    subAgent = "tool";
-    intent = "tool_use";
   }
   return { intent, subAgent, confidence: 0.4, rationale: "keyword fallback" };
 }
