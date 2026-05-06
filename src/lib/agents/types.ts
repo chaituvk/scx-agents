@@ -243,14 +243,6 @@ export interface PendingAction {
   createdAt: string;
 }
 
-export interface PendingApproval {
-  id: string;
-  reason: string;
-  approver?: string;
-  target: string;
-  createdAt: string;
-}
-
 export interface TopicFrame {
   intent: string;
   journeyId?: string;
