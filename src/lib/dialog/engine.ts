@@ -1,4 +1,5 @@
 import { FlowNode, FlowEdge, DialogState, Journey } from "./types";
+import type { ConditionExpression } from "@/lib/journey/schema";
 
 export interface DialogResult {
   messages: string[];
@@ -216,16 +217,22 @@ export class DialogEngine {
     const outgoing = this.journey.edges.filter((e) => e.source === currentNode.id);
 
     if (outgoing.length === 0) return null;
-    if (outgoing.length === 1) return outgoing[0].target;
+    if (outgoing.length === 1) {
+      const edge = outgoing[0];
+      if (edge.condition && currentNode.type === "condition") {
+        const varName = currentNode.data.variable as string;
+        return this.evaluateCondition(edge.condition, state, varName, state.variables[varName]) ? edge.target : null;
+      }
+      return edge.target;
+    }
 
     // Multiple edges — find matching condition
     if (currentNode.type === "condition") {
-      const condition = currentNode.data.condition as string;
       const varName = currentNode.data.variable as string;
       const varValue = state.variables[varName];
 
       for (const edge of outgoing) {
-        if (edge.condition && this.evaluateCondition(edge.condition, varValue)) {
+        if (edge.condition && this.evaluateCondition(edge.condition, state, varName, varValue)) {
           return edge.target;
         }
       }
@@ -245,16 +252,77 @@ export class DialogEngine {
     return defaultEdge?.target || null;
   }
 
-  private evaluateCondition(condition: string, value: string | undefined): boolean {
-    if (!value) return false;
-    const [operator, operand] = condition.split(" ");
+  private evaluateCondition(
+    condition: FlowEdge["condition"],
+    state: DialogState,
+    defaultVarName?: string,
+    defaultValue?: string
+  ): boolean {
+    if (!condition) return false;
+    if (typeof condition !== "string") {
+      return this.evaluateConditionExpression(condition, state);
+    }
+
+    const trimmed = condition.trim();
+    if (!trimmed) return false;
+    const [operator, ...rest] = trimmed.split(/\s+/);
+    const operand = rest.join(" ");
+    const value = defaultValue ?? (defaultVarName ? state.variables[defaultVarName] : undefined);
+
     switch (operator) {
-      case "eq": return value === operand;
-      case "neq": return value !== operand;
-      case "gt": return parseFloat(value) > parseFloat(operand);
-      case "lt": return parseFloat(value) < parseFloat(operand);
-      case "contains": return value.toLowerCase().includes(operand.toLowerCase());
+      case "always": return true;
+      case "empty": return !value;
+      case "not_empty": return Boolean(value);
+      case "eq": return String(value ?? "") === operand;
+      case "neq": return String(value ?? "") !== operand;
+      case "gt": return parseFloat(String(value ?? "")) > parseFloat(operand);
+      case "gte": return parseFloat(String(value ?? "")) >= parseFloat(operand);
+      case "lt": return parseFloat(String(value ?? "")) < parseFloat(operand);
+      case "lte": return parseFloat(String(value ?? "")) <= parseFloat(operand);
+      case "contains": return String(value ?? "").toLowerCase().includes(operand.toLowerCase());
+      case "matches": return this.matchesRegex(String(value ?? ""), operand);
       default: return false;
+    }
+  }
+
+  private evaluateConditionExpression(condition: ConditionExpression, state: DialogState): boolean {
+    switch (condition.op) {
+      case "always":
+        return true;
+      case "empty":
+        return !state.variables[condition.var];
+      case "not_empty":
+        return Boolean(state.variables[condition.var]);
+      case "eq":
+        return String(state.variables[condition.var] ?? "") === String(condition.value);
+      case "neq":
+        return String(state.variables[condition.var] ?? "") !== String(condition.value);
+      case "gt":
+        return Number(state.variables[condition.var]) > Number(condition.value);
+      case "gte":
+        return Number(state.variables[condition.var]) >= Number(condition.value);
+      case "lt":
+        return Number(state.variables[condition.var]) < Number(condition.value);
+      case "lte":
+        return Number(state.variables[condition.var]) <= Number(condition.value);
+      case "contains":
+        return String(state.variables[condition.var] ?? "").toLowerCase().includes(String(condition.value).toLowerCase());
+      case "matches":
+        return this.matchesRegex(String(state.variables[condition.var] ?? ""), String(condition.value));
+      case "and":
+        return condition.conditions.every((c) => this.evaluateConditionExpression(c, state));
+      case "or":
+        return condition.conditions.some((c) => this.evaluateConditionExpression(c, state));
+      case "not":
+        return !this.evaluateConditionExpression(condition.condition, state);
+    }
+  }
+
+  private matchesRegex(value: string, pattern: string): boolean {
+    try {
+      return new RegExp(pattern).test(value);
+    } catch {
+      return false;
     }
   }
 

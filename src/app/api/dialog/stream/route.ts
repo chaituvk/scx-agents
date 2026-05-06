@@ -1,24 +1,18 @@
+// /api/dialog/stream — legacy SSE entry point. As of Stage 4 this delegates
+// to orchestrator.runTurn() and fake-streams the response back as SSE events.
+// orchestrator turns are non-streaming today; this preserves the per-word
+// chunking the chat UI expects without genuinely streaming from the LLM.
+
 import { NextRequest } from "next/server";
-import { journeyRepo, dialogStateRepo, messageRepo, agentRepo, conversationRepo } from "@/lib/repositories";
-import { DialogEngine } from "@/lib/dialog/engine";
-import { HybridEngine } from "@/lib/hybrid-engine";
-import { runAgentStep, runAgentWelcome, type AgentConfig } from "@/lib/agent-runtime";
-import type { DialogState as EngineDialogState } from "@/lib/dialog/types";
+import { conversationRepo, dialogStateRepo, journeyRepo, messageRepo, agentRepo } from "@/lib/repositories";
+import { orchestrator } from "@/lib/orchestrator";
+import { runAgentWelcome, type AgentConfig } from "@/lib/agent-runtime";
 import { getTenantFromRequest } from "@/lib/tenant";
+import { assertTenantAccess } from "@/lib/runtime/tenant-guard";
+import type { SubAgentName } from "@/lib/agents/types";
 
-function toEngineState(dbState: any): EngineDialogState {
-  return {
-    conversationId: dbState.conversation_id,
-    journeyId: dbState.journey_id || "",
-    currentNodeId: dbState.current_node_id || "",
-    variables: dbState.variables || {},
-    history: dbState.history || [],
-    context: dbState.context || {},
-  };
-}
-
-async function updateConversationLifecycle(conversationId: string, done: boolean, actions: any[]) {
-  const hasTransfer = actions.some((a: any) => a.type === "transfer" || a.type === "escalate");
+async function updateConversationLifecycle(conversationId: string, done: boolean, actions: Array<{ type: string }>) {
+  const hasTransfer = actions.some((a) => a.type === "transfer" || a.type === "escalate");
   if (hasTransfer) {
     await conversationRepo.update(conversationId, { status: "escalated", updated_at: new Date().toISOString() });
   } else if (done) {
@@ -26,15 +20,12 @@ async function updateConversationLifecycle(conversationId: string, done: boolean
   }
 }
 
-function sendEvent(controller: ReadableStreamDefaultController, encoder: TextEncoder, event: string, data: any) {
+function sendEvent(controller: ReadableStreamDefaultController, encoder: TextEncoder, event: string, data: unknown) {
   controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
 }
 
 async function* streamWords(text: string) {
-  const words = text.split(/(\s+)/);
-  for (const word of words) {
-    yield word;
-  }
+  for (const word of text.split(/(\s+)/)) yield word;
 }
 
 export async function POST(req: NextRequest) {
@@ -45,8 +36,16 @@ export async function POST(req: NextRequest) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
-        let dbState = await dialogStateRepo.findByConversation(conversationId);
-        const journey = await journeyRepo.findById(journeyId || dbState?.journey_id || "");
+        const conversation = await conversationRepo.findByIdForTenant(conversationId, tenantId);
+        if (!conversation) {
+          sendEvent(controller, encoder, "error", { message: "Conversation not found" });
+          controller.close();
+          return;
+        }
+
+        let dbState = await dialogStateRepo.findByConversationForTenant(conversationId, tenantId);
+        const resolvedJourneyId = journeyId || dbState?.journey_id || "";
+        const journey = resolvedJourneyId ? await journeyRepo.findByIdForTenant(resolvedJourneyId, tenantId) : null;
 
         if (!journey) {
           sendEvent(controller, encoder, "error", { message: "Journey not found" });
@@ -54,61 +53,18 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        sendEvent(controller, encoder, "start", { mode: journey.execution_mode || "deterministic", journey: journey.name });
-
-        const mode = journey.execution_mode || "deterministic";
-
-        if (mode === "deterministic") {
-          let result: any;
-          let engineState: EngineDialogState;
-
-          if (!dbState) {
-            engineState = DialogEngine.createState(conversationId, journey.id);
-            const engine = new DialogEngine(journey as any);
-            result = engine.start(engineState);
-
-            dbState = await dialogStateRepo.create({
-              tenant_id: tenantId,
-              conversation_id: conversationId,
-              journey_id: journey.id,
-              current_node_id: engineState.currentNodeId,
-              variables: engineState.variables,
-              history: engineState.history,
-              context: {},
-              done: 0,
-            });
-          } else {
-            engineState = toEngineState(dbState);
-            const engine = new DialogEngine(journey as any);
-            engineState.context.lastMessage = message;
-            result = engine.handleInput(engineState, message);
-
-            await dialogStateRepo.update(dbState.id, {
-              current_node_id: engineState.currentNodeId,
-              variables: engineState.variables,
-              history: engineState.history,
-              context: engineState.context,
-              done: result.done ? 1 : 0,
-            });
-          }
-
-          sendEvent(controller, encoder, "node", { nodeId: engineState.currentNodeId, variables: engineState.variables });
-          for (const msg of result.messages || []) {
-            for await (const word of streamWords(msg)) {
-              sendEvent(controller, encoder, "chunk", { text: word });
-            }
-            sendEvent(controller, encoder, "message", { text: msg });
-          }
-          for (const action of result.actions || []) {
-            sendEvent(controller, encoder, "action", action);
-          }
-          await updateConversationLifecycle(conversationId, result.done, result.actions || []);
-          sendEvent(controller, encoder, "done", { done: result.done, state: { currentNodeId: engineState.currentNodeId, variables: engineState.variables } });
+        const tenantAccess = assertTenantAccess({ tenantId, conversation, dialogState: dbState, journey });
+        if (!tenantAccess.ok) {
+          sendEvent(controller, encoder, "error", { message: tenantAccess.error || "Tenant access denied" });
           controller.close();
           return;
         }
 
-        if (mode === "llm") {
+        const mode = journey.execution_mode || "deterministic";
+        sendEvent(controller, encoder, "start", { mode, journey: journey.name });
+
+        // ── LLM welcome (first turn) — preserved inline ──
+        if (mode === "llm" && !dbState) {
           const agents = await agentRepo.findAll(tenantId);
           const agent = agents.find((a) => a.id === journey.id) || agents[0];
           if (!agent) {
@@ -116,7 +72,6 @@ export async function POST(req: NextRequest) {
             controller.close();
             return;
           }
-
           const config: AgentConfig = {
             name: agent.name,
             goals: agent.goals || [],
@@ -129,148 +84,95 @@ export async function POST(req: NextRequest) {
             approval_threshold: agent.approval_threshold,
           };
 
-          if (!dbState) {
-            dbState = await dialogStateRepo.create({
-              tenant_id: tenantId,
-              conversation_id: conversationId,
-              journey_id: journey.id,
-              current_node_id: "llm",
-              variables: {},
-              history: [],
-              context: { mode: "llm" },
-              done: 0,
-            });
+          dbState = await dialogStateRepo.create({
+            tenant_id: tenantId,
+            conversation_id: conversationId,
+            journey_id: journey.id,
+            current_node_id: "llm",
+            variables: {},
+            history: [],
+            context: { mode: "llm" },
+            done: 0,
+          });
 
-            const welcome = await runAgentWelcome(config);
-            await messageRepo.create({ tenant_id: tenantId, conversation_id: conversationId, role: "assistant", content: welcome, agent_id: agent.id });
-            for await (const word of streamWords(welcome)) {
-              sendEvent(controller, encoder, "chunk", { text: word });
-            }
-            sendEvent(controller, encoder, "done", { done: false, state: { variables: {} } });
-            controller.close();
-            return;
-          }
+          const welcome = await runAgentWelcome(config);
+          await messageRepo.create({ tenant_id: tenantId, conversation_id: conversationId, role: "assistant", content: welcome, agent_id: agent.id });
 
-          await messageRepo.create({ tenant_id: tenantId, conversation_id: conversationId, role: "user", content: message });
-          sendEvent(controller, encoder, "thinking", { status: "processing" });
-
-          const history = await messageRepo.findByConversation(conversationId);
-          const step = await runAgentStep(config, {
-            conversationId,
-            variables: dbState.variables || {},
-            history,
-          }, message);
-
-          if (step.toolCalls?.length) {
-            for (const tc of step.toolCalls) sendEvent(controller, encoder, "tool", tc);
-          }
-          if (step.knowledgeUsed?.length) {
-            for (const kb of step.knowledgeUsed) sendEvent(controller, encoder, "knowledge", kb);
-          }
-          if (step.guardrailTriggered) {
-            sendEvent(controller, encoder, "guardrail", { triggered: step.guardrailTriggered });
-          }
-
-          await messageRepo.create({ tenant_id: tenantId, conversation_id: conversationId, role: "assistant", content: step.response, agent_id: agent.id });
-          for await (const word of streamWords(step.response)) {
+          sendEvent(controller, encoder, "node", { nodeId: "llm", variables: {} });
+          for await (const word of streamWords(welcome)) {
             sendEvent(controller, encoder, "chunk", { text: word });
           }
-          sendEvent(controller, encoder, "message", { text: step.response });
-
-          const newVars = { ...(dbState.variables || {}), ...(step.variables || {}) };
-          await dialogStateRepo.update(dbState.id, {
-            variables: newVars,
-            context: { ...dbState.context, lastMessage: message },
-            done: step.done ? 1 : 0,
+          sendEvent(controller, encoder, "message", { text: welcome });
+          sendEvent(controller, encoder, "done", {
+            done: false,
+            state: { currentNodeId: "llm", variables: {} },
           });
-
-          await updateConversationLifecycle(conversationId, step.done, step.actions || []);
-          sendEvent(controller, encoder, "done", { done: step.done, state: { variables: newVars } });
           controller.close();
           return;
         }
 
-        if (mode === "hybrid") {
-          const agents = await agentRepo.findAll(tenantId);
-          const agent = agents.find((a) => a.id === journey.id) || agents[0];
-          if (!agent) {
-            sendEvent(controller, encoder, "error", { message: "No agent configured for hybrid mode" });
-            controller.close();
-            return;
-          }
+        // ── Delegate to orchestrator (user message persisted after — see ──
+        //    H2 fix: persisting before would let memory.load read it, which
+        //    respondSkill would then append again and the LLM prompt would
+        //    contain the user's text twice. Order: orchestrator -> persist).
+        sendEvent(controller, encoder, "thinking", { status: "processing" });
 
-          const config: AgentConfig = {
-            name: agent.name,
-            goals: agent.goals || [],
-            guardrails: agent.guardrails || [],
-            skills: agent.skills || [],
-            tone: agent.tone,
-            welcome_message: agent.welcome_message || undefined,
-            off_limit_topics: agent.off_limit_topics || [],
-            off_limit_phrases: agent.off_limit_phrases || [],
-          };
+        const forceSubAgent: SubAgentName = mode === "llm" ? "rag" : "workflow";
+        const turn = await orchestrator.runTurn({
+          tenantId,
+          conversationId,
+          message,
+          variables: (dbState?.variables as Record<string, string> | undefined) ?? {},
+          requestedJourneyId: journey.id,
+          forceSubAgent,
+        });
 
-          const hybridEngine = new HybridEngine(journey as any, config);
-
-          if (!dbState) {
-            const engineState = DialogEngine.createState(conversationId, journey.id);
-            const result = await hybridEngine.start(engineState);
-
-            dbState = await dialogStateRepo.create({
-              tenant_id: tenantId,
-              conversation_id: conversationId,
-              journey_id: journey.id,
-              current_node_id: engineState.currentNodeId,
-              variables: engineState.variables,
-              history: engineState.history,
-              context: { hybridState: result.hybridState },
-              done: 0,
-            });
-
-            for (const msg of result.messages || []) {
-              for await (const word of streamWords(msg)) {
-                sendEvent(controller, encoder, "chunk", { text: word });
-              }
-              sendEvent(controller, encoder, "message", { text: msg });
-            }
-            sendEvent(controller, encoder, "done", { done: result.done, state: { currentNodeId: engineState.currentNodeId, variables: engineState.variables } });
-            controller.close();
-            return;
-          }
-
-          const engineState = toEngineState(dbState);
-          const hybridState = (dbState.context as any)?.hybridState || { mode: "journey" };
-          const history = await messageRepo.findByConversation(conversationId);
-
-          const result = await hybridEngine.handleInput(
-            engineState,
-            hybridState,
-            { conversationId, variables: dbState.variables || {}, history },
-            message
-          );
-
-          for (const msg of result.messages || []) {
-            for await (const word of streamWords(msg)) {
-              sendEvent(controller, encoder, "chunk", { text: word });
-            }
-            sendEvent(controller, encoder, "message", { text: msg });
-          }
-
-          await dialogStateRepo.update(dbState.id, {
-            current_node_id: result.state.currentNodeId,
-            variables: result.state.variables,
-            history: result.state.history,
-            context: { hybridState: result.hybridState, lastMessage: message },
-            done: result.done ? 1 : 0,
+        if (forceSubAgent === "rag") {
+          await dialogStateRepo.upsertByConversationForTenant(tenantId, conversationId, {
+            journey_id: journey.id,
+            current_node_id: "llm",
+            variables: turn.variables,
+            context: { mode: "llm", lastMessage: message },
+            done: turn.done ? 1 : 0,
           });
-
-          await updateConversationLifecycle(conversationId, result.done, result.actions || []);
-          sendEvent(controller, encoder, "done", { done: result.done, state: { currentNodeId: result.state.currentNodeId, variables: result.state.variables } });
-          controller.close();
-          return;
         }
 
-        sendEvent(controller, encoder, "error", { message: `Unknown execution mode: ${mode}` });
+        const latest = await dialogStateRepo.findByConversationForTenant(conversationId, tenantId);
+        const currentNodeId = latest?.current_node_id ?? "";
+
+        // Emit ancillary events the chat UI optionally renders.
+        if (turn.toolCalls?.length) {
+          for (const tc of turn.toolCalls) sendEvent(controller, encoder, "tool", tc);
+        }
+        if (turn.citations?.length) {
+          for (const source of turn.citations) {
+            sendEvent(controller, encoder, "knowledge", { source, title: source, content: "", relevance: 1 });
+          }
+        }
+        if (!turn.supervisor.pass) {
+          sendEvent(controller, encoder, "guardrail", {
+            triggered: turn.supervisor.issues.map((i) => i.detail).join("; "),
+          });
+        }
+        sendEvent(controller, encoder, "node", { nodeId: currentNodeId, variables: turn.variables });
+
+        // Persist user + assistant messages after orchestrator (see H2 above).
+        await messageRepo.create({ tenant_id: tenantId, conversation_id: conversationId, role: "user", content: message });
+        await messageRepo.create({ tenant_id: tenantId, conversation_id: conversationId, role: "assistant", content: turn.response });
+        for await (const word of streamWords(turn.response)) {
+          sendEvent(controller, encoder, "chunk", { text: word });
+        }
+        sendEvent(controller, encoder, "message", { text: turn.response });
+
+        for (const action of turn.actions || []) {
+          sendEvent(controller, encoder, "action", action);
+        }
+
+        await updateConversationLifecycle(conversationId, turn.done, turn.actions);
+        sendEvent(controller, encoder, "done", {
+          done: turn.done,
+          state: { currentNodeId, variables: turn.variables },
+        });
         controller.close();
       },
     });
@@ -283,10 +185,10 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    const detail = err instanceof Error ? err.message : "Unknown error";
     return new Response(
-      JSON.stringify({ error: "Dialog stream failed", details: message }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({ error: "Dialog stream failed", details: detail }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
     );
   }
 }

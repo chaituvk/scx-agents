@@ -15,6 +15,8 @@ test-data/
     │   ├── agents.json
     │   ├── journeys.json
     │   ├── integrations.json
+    │   ├── runtime-profiles.json
+    │   ├── journey-scenarios.json
     │   ├── knowledge-sources.json
     │   ├── knowledge-gaps.json
     │   ├── regression-tests.json
@@ -41,6 +43,25 @@ Load stub data for a specific tenant:
 import rMobileJourneys from "@/test-data/tenants/r-mobile/journeys.json";
 import ichibaAgents from "@/test-data/tenants/ichiba/agents.json";
 ```
+
+## MVP Runtime Fixtures
+
+Each tenant now includes:
+
+- `journeys.json`: deterministic, LLM, and hybrid journey definitions.
+- `runtime-profiles.json`: tenant-scoped router/specialist profiles, allowed tools, allowed slots, and policies.
+- `journey-scenarios.json`: executable multi-turn scenario DSL for behavior, policy, technical, and guardrail coverage.
+  Hybrid scenarios can include `runtime.required_profiles` and `runtime.tool_mocks` for deterministic suite runs.
+
+These fixtures are loaded by `src/lib/seed-mvp-fixtures.ts` during app DB seeding.
+
+Current MVP coverage:
+
+| Tenant | Complex Hybrid Workflow | Runtime Profiles | Scenario DSL Cases |
+|--------|--------------------------|------------------|--------------------|
+| r-mobile | Device Protection Claim | router + device specialist | 5 |
+| ichiba | High Value Refund Review | router + refund specialist | 5 |
+| r-travel | Travel Disruption Rebooking | router + disruption specialist | 5 |
 
 ## Credentials
 

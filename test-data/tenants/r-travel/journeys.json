@@ -12,35 +12,78 @@
         {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
         {"id":"n2","type":"end","label":"End","position":{"x":100,"y":200},"data":{"text":"Enjoy your trip!"}}
       ],
-      "edges": [
-        {"id":"e1","source":"n1","target":"n2"}
-      ],
+      "edges": [{"id":"e1","source":"n1","target":"n2"}],
       "variables": []
     },
     {
       "id": "journey-6",
       "tenant_id": "r-travel",
       "name": "Cancellation & Refund",
-      "description": "Hybrid cancellation flow",
+      "description": "Deterministic cancellation flow",
+      "execution_mode": "deterministic",
+      "status": "active",
+      "version": "1.1.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"input","label":"Booking Ref","position":{"x":100,"y":200},"data":{"prompt":"Booking reference?","variable":"booking_ref"}},
+        {"id":"n3","type":"input","label":"Free Cancel","position":{"x":100,"y":300},"data":{"prompt":"Does your fare include free cancellation? (yes/no)","variable":"free_cancel"}},
+        {"id":"n4","type":"condition","label":"Free Cancel?","position":{"x":100,"y":400},"data":{"variable":"free_cancel","condition":"eq yes"}},
+        {"id":"n5","type":"message","label":"Refunded","position":{"x":300,"y":400},"data":{"text":"Cancellation for {{booking_ref}} can continue under the free cancellation policy."}},
+        {"id":"n6","type":"transfer","label":"Agent","position":{"x":0,"y":400},"data":{"department":"Support","reason":"Non-free cancellation review"}},
+        {"id":"n7","type":"end","label":"End","position":{"x":300,"y":520},"data":{}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"},
+        {"id":"e2","source":"n2","target":"n3"},
+        {"id":"e3","source":"n3","target":"n4"},
+        {"id":"e4","source":"n4","target":"n5","condition":"eq yes"},
+        {"id":"e5","source":"n4","target":"n6"},
+        {"id":"e6","source":"n5","target":"n7"}
+      ],
+      "variables": ["booking_ref","free_cancel"]
+    },
+    {
+      "id": "journey-rtravel-disruption-hybrid",
+      "tenant_id": "r-travel",
+      "name": "Travel Disruption Rebooking",
+      "description": "Hybrid workflow for disrupted bookings, rebooking, cancellation fees, and approval",
       "execution_mode": "hybrid",
       "status": "active",
       "version": "1.0.0",
       "nodes": [
         {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
-        {"id":"n2","type":"input","label":"Booking Ref","position":{"x":100,"y":200},"data":{"prompt":"Booking reference?","variable":"booking_ref"}},
-        {"id":"n3","type":"condition","label":"Free Cancel?","position":{"x":100,"y":300},"data":{"variable":"free_cancel","condition":"eq yes"}},
-        {"id":"n4","type":"message","label":"Refunded","position":{"x":300,"y":300},"data":{"text":"Cancellation processed!"}},
-        {"id":"n5","type":"transfer","label":"Agent","position":{"x":100,"y":400},"data":{"department":"Support"}},
-        {"id":"n6","type":"end","label":"End","position":{"x":300,"y":400},"data":{}}
+        {"id":"n2","type":"message","label":"Intro","position":{"x":100,"y":200},"data":{"text":"I can help with a disrupted trip. Tell me your booking reference and what changed."}},
+        {"id":"n3","type":"input","label":"Disruption Details","position":{"x":100,"y":300},"data":{"prompt":"What happened with your trip?","variable":"disruption_description"}},
+        {"id":"n4","type":"llm_extract","label":"Extract Travel Slots","position":{"x":100,"y":400},"data":{"profile":"rtravel_disruption_specialist","allowed_slots":["booking_ref","destination","change_reason","refund_amount"]}},
+        {"id":"n5","type":"tool_call","label":"Lookup Booking","position":{"x":100,"y":500},"data":{"profile":"rtravel_disruption_specialist","tool":"order_lookup","input":{"order_number":"{{booking_ref}}"},"output_map":{"order_id":"booking_ref","total":"booking_total"}}},
+        {"id":"n6","type":"policy_check","label":"Travel Policy","position":{"x":100,"y":600},"data":{"profile":"rtravel_disruption_specialist"}},
+        {"id":"n7","type":"condition","label":"Escalation Required?","position":{"x":100,"y":700},"data":{"variable":"escalation_required","condition":"eq true"}},
+        {"id":"n8","type":"llm_draft","label":"Escalation Draft","position":{"x":0,"y":820},"data":{"profile":"rtravel_disruption_specialist","instruction":"Explain that this disruption requires a travel specialist because of policy or high value.","must_not_claim":["refund approved","visa guaranteed"],"fallback":"This case needs a travel specialist review before we can confirm refund or rebooking options."}},
+        {"id":"n9","type":"transfer","label":"Travel Specialist","position":{"x":0,"y":940},"data":{"department":"Travel Support","reason":"Disruption policy review"}},
+        {"id":"n10","type":"llm_draft","label":"Rebooking Draft","position":{"x":320,"y":820},"data":{"profile":"rtravel_disruption_specialist","instruction":"Explain available rebooking next steps without guaranteeing inventory or visa outcomes.","must_not_claim":["visa guaranteed","refund approved"],"fallback":"I can continue with rebooking options. Availability and fees must be confirmed before finalizing."}},
+        {"id":"n11","type":"end","label":"End","position":{"x":320,"y":940},"data":{"text":"Thanks for choosing RTravel."}}
       ],
       "edges": [
         {"id":"e1","source":"n1","target":"n2"},
         {"id":"e2","source":"n2","target":"n3"},
-        {"id":"e3","source":"n3","target":"n4","condition":"eq yes"},
-        {"id":"e4","source":"n3","target":"n5"},
-        {"id":"e5","source":"n4","target":"n6"}
+        {"id":"e3","source":"n3","target":"n4"},
+        {"id":"e4","source":"n4","target":"n5"},
+        {"id":"e5","source":"n5","target":"n6"},
+        {"id":"e6","source":"n6","target":"n7"},
+        {"id":"e7","source":"n7","target":"n8","condition":"eq true"},
+        {"id":"e8","source":"n7","target":"n10"},
+        {"id":"e9","source":"n8","target":"n9"},
+        {"id":"e10","source":"n10","target":"n11"}
       ],
-      "variables": ["booking_ref","free_cancel"]
+      "variables": {
+        "disruption_description": "",
+        "booking_ref": "",
+        "destination": "",
+        "change_reason": "",
+        "refund_amount": "",
+        "booking_total": "",
+        "escalation_required": ""
+      }
     }
   ]
 }

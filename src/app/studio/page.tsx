@@ -66,6 +66,15 @@ const studioModules = [
     bg: "bg-pink-500/10",
   },
   {
+    name: "Runtime Profiles",
+    href: "/studio/profiles",
+    icon: Cpu,
+    description: "Tenant-scoped router/specialist/policy profiles loaded by the orchestrator each turn",
+    status: "live",
+    color: "text-cyan-400",
+    bg: "bg-cyan-500/10",
+  },
+  {
     name: "Test Suite",
     href: "/studio/testing",
     icon: Beaker,

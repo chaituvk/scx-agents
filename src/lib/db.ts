@@ -9,10 +9,22 @@ let usePostgres = false;
 
 const pgUrl = process.env.DATABASE_URL || "postgresql://sierra:sierra2026@localhost:5432/sierra";
 
+// Pool sizing (Stage 12): default 50 to comfortably support ~100 tenants
+// with light concurrent traffic on a single Next.js node. Override via
+// DB_POOL_MAX. idleTimeoutMillis intentionally short (30s) so idle
+// connections release back to Postgres rather than holding a slot per
+// tenant indefinitely.
+const poolMax = (() => {
+  const raw = process.env.DB_POOL_MAX;
+  if (!raw) return 50;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
+})();
+
 try {
   pgPool = new Pool({
     connectionString: pgUrl,
-    max: 20,
+    max: poolMax,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,
   });
@@ -221,6 +233,23 @@ function initPgSchema() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS runtime_profiles (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'specialist',
+      status TEXT DEFAULT 'active',
+      description TEXT,
+      allowed_journeys JSONB,
+      allowed_tools JSONB,
+      allowed_slots JSONB,
+      guardrails JSONB,
+      policies JSONB,
+      config JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS insights (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -268,6 +297,12 @@ function initPgSchema() {
       history JSONB,
       context JSONB,
       done INTEGER DEFAULT 0,
+      active_agent TEXT,
+      last_intent TEXT,
+      pending_action JSONB,
+      pending_approval JSONB,
+      topic_stack JSONB,
+      handoff_state JSONB,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -335,6 +370,21 @@ function initPgSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS journey_scenarios (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      journey_id TEXT NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'active',
+      category TEXT DEFAULT 'behavior',
+      turns JSONB NOT NULL,
+      expectations JSONB,
+      tags JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS knowledge_embeddings (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -344,12 +394,28 @@ function initPgSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      ts TIMESTAMPTZ NOT NULL,
+      type TEXT NOT NULL,
+      payload JSONB NOT NULL
+    );
+
     -- Migration: add tenant_id to existing tables (must run before indexes)
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE integrations ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE insights ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE flagged_conversations ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
+    ALTER TABLE runtime_profiles ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS active_agent TEXT;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS last_intent TEXT;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS pending_action JSONB;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS pending_approval JSONB;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS topic_stack JSONB;
+    ALTER TABLE dialog_states ADD COLUMN IF NOT EXISTS handoff_state JSONB;
     ALTER TABLE knowledge_sources ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE knowledge_gaps ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE regression_tests ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
@@ -367,6 +433,8 @@ function initPgSchema() {
     CREATE INDEX IF NOT EXISTS idx_insights_tenant ON insights(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_flagged_status ON flagged_conversations(status);
     CREATE INDEX IF NOT EXISTS idx_flagged_tenant ON flagged_conversations(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_runtime_profiles_tenant ON runtime_profiles(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_runtime_profiles_kind ON runtime_profiles(kind);
     CREATE INDEX IF NOT EXISTS idx_journeys_tenant ON journeys(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_dialog_states_tenant ON dialog_states(tenant_id);
@@ -375,6 +443,8 @@ function initPgSchema() {
     CREATE INDEX IF NOT EXISTS idx_regression_tests_tenant ON regression_tests(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_voice_sims_tenant ON voice_sims(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_simulation_runs_tenant ON simulation_runs(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_journey_scenarios_tenant ON journey_scenarios(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_journey_scenarios_journey ON journey_scenarios(journey_id);
 
     CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -382,6 +452,9 @@ function initPgSchema() {
     ON knowledge_embeddings
     USING hnsw (embedding vector_cosine_ops);
     CREATE INDEX IF NOT EXISTS idx_knowledge_embeddings_tenant ON knowledge_embeddings(tenant_id);
+
+    CREATE INDEX IF NOT EXISTS idx_audit_events_conversation_ts ON audit_events(conversation_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -483,6 +556,23 @@ function initSqliteSchema() {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS runtime_profiles (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'specialist',
+      status TEXT DEFAULT 'active',
+      description TEXT,
+      allowed_journeys TEXT,
+      allowed_tools TEXT,
+      allowed_slots TEXT,
+      guardrails TEXT,
+      policies TEXT,
+      config TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS insights (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -530,6 +620,12 @@ function initSqliteSchema() {
       history TEXT,
       context TEXT,
       done INTEGER DEFAULT 0,
+      active_agent TEXT,
+      last_intent TEXT,
+      pending_action TEXT,
+      pending_approval TEXT,
+      topic_stack TEXT,
+      handoff_state TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -597,6 +693,30 @@ function initSqliteSchema() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      ts TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS journey_scenarios (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      journey_id TEXT NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'active',
+      category TEXT DEFAULT 'behavior',
+      turns TEXT NOT NULL,
+      expectations TEXT,
+      tags TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_messages_tenant ON messages(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
@@ -607,6 +727,8 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_insights_tenant ON insights(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_flagged_status ON flagged_conversations(status);
     CREATE INDEX IF NOT EXISTS idx_flagged_tenant ON flagged_conversations(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_runtime_profiles_tenant ON runtime_profiles(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_runtime_profiles_kind ON runtime_profiles(kind);
     CREATE INDEX IF NOT EXISTS idx_journeys_tenant ON journeys(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_dialog_states_tenant ON dialog_states(tenant_id);
@@ -615,7 +737,29 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_regression_tests_tenant ON regression_tests(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_voice_sims_tenant ON voice_sims(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_simulation_runs_tenant ON simulation_runs(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_conversation_ts ON audit_events(conversation_id, ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_journey_scenarios_tenant ON journey_scenarios(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_journey_scenarios_journey ON journey_scenarios(journey_id);
   `);
+
+  // Idempotent additive column migrations for existing SQLite databases.
+  // SQLite ADD COLUMN doesn't support IF NOT EXISTS, so we check via PRAGMA.
+  const dialogCols = sqliteDb.prepare("PRAGMA table_info(dialog_states)").all() as { name: string }[];
+  const existing = new Set(dialogCols.map((c) => c.name));
+  const additions: Array<[string, string]> = [
+    ["active_agent", "TEXT"],
+    ["last_intent", "TEXT"],
+    ["pending_action", "TEXT"],
+    ["pending_approval", "TEXT"],
+    ["topic_stack", "TEXT"],
+    ["handoff_state", "TEXT"],
+  ];
+  for (const [name, type] of additions) {
+    if (!existing.has(name)) {
+      sqliteDb.exec(`ALTER TABLE dialog_states ADD COLUMN ${name} ${type}`);
+    }
+  }
 }
 
 // ── Seed ────────────────────────────────────────────────────────────
@@ -664,6 +808,13 @@ async function seedDatabase() {
     await seedStudioData();
   } catch (err) {
     console.log("[seed] Studio seed skipped:", (err as Error).message);
+  }
+
+  try {
+    const { seedMvpFixtures } = await import("./seed-mvp-fixtures");
+    await seedMvpFixtures();
+  } catch (err) {
+    console.log("[seed] MVP fixture seed skipped:", (err as Error).message);
   }
 }
 

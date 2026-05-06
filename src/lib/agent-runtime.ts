@@ -17,6 +17,8 @@ export interface AgentConfig {
 
 export interface AgentContext {
   conversationId: string;
+  /** Required since Stage 8 — RAG retrieval is tenant-scoped. */
+  tenantId: string;
   customerName?: string;
   customerEmail?: string;
   variables: Record<string, string>;
@@ -82,8 +84,8 @@ export async function runAgentStep(
   context: AgentContext,
   userMessage: string
 ): Promise<AgentStep> {
-  // 1. Retrieve relevant knowledge
-  const knowledge = await retrieveKnowledge(userMessage, 3);
+  // 1. Retrieve relevant knowledge (tenant-scoped; Stage 8)
+  const knowledge = await retrieveKnowledge(userMessage, 3, context.tenantId);
   const knowledgeContext = knowledge.length
     ? `RELEVANT KNOWLEDGE:\n${knowledge.map((k) => `[${k.source}] ${k.title}: ${k.content}`).join("\n")}\n\n`
     : "";

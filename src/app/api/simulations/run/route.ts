@@ -1,41 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
-import { simulationRunRepo, journeyRepo } from "@/lib/repositories";
+import { simulationRunRepo, journeyRepo, journeyScenarioRepo, toJourneyScenario } from "@/lib/repositories";
 import { getTenantFromRequest } from "@/lib/tenant";
+import { createSmokeScenario, runJourneyScenario } from "@/lib/journey/scenario-runner";
+import { loadTenantRuntime } from "@/lib/runtime/tenant-runtime";
+import { makeAuditEmitter } from "@/lib/audit";
+import { emitAuditFromActions, emitJourneyTransitions, type JourneyHistoryEntry } from "@/lib/audit/from-actions";
 
 export async function POST(req: NextRequest) {
   try {
     const { scenarioId } = await req.json();
     const tenantId = await getTenantFromRequest(req);
-    const journey = await journeyRepo.findById(scenarioId);
+    const storedScenario = await journeyScenarioRepo.findById(scenarioId);
+    const journey = storedScenario
+      ? await journeyRepo.findByIdForTenant(storedScenario.journey_id, tenantId)
+      : await journeyRepo.findByIdForTenant(scenarioId, tenantId);
+
     if (!journey) {
       return NextResponse.json({ error: "Scenario not found" }, { status: 404 });
     }
+    if (journey.tenant_id !== tenantId || (storedScenario?.tenant_id && storedScenario.tenant_id !== tenantId)) {
+      return NextResponse.json({ error: "Scenario not found" }, { status: 404 });
+    }
 
-    const outcomes = ["success", "partial", "failure"];
-    const outcome = outcomes[Math.floor(Math.random() * outcomes.length)];
-    const metrics = {
-      resolution: Math.floor(60 + Math.random() * 40),
-      empathy: Math.floor(60 + Math.random() * 40),
-      compliance: Math.floor(60 + Math.random() * 40),
-      accuracy: Math.floor(60 + Math.random() * 40),
-    };
-    const issues: string[] = [];
-    if (outcome === "failure") issues.push("Agent failed to resolve customer issue");
-    if (outcome === "partial") issues.push("Resolution incomplete - required escalation");
-    if (metrics.compliance < 75) issues.push("Guardrail violation detected");
-    if (metrics.accuracy < 70) issues.push("Incorrect information provided");
+    const scenario = storedScenario ? toJourneyScenario(storedScenario) : createSmokeScenario(journey);
+    const runtime = await loadTenantRuntime(tenantId);
+    const result = await runJourneyScenario(journey, scenario, runtime);
 
     const run = await simulationRunRepo.create({
       tenant_id: tenantId,
-      scenario_name: journey.name,
-      outcome,
-      metrics,
-      issues,
-      messages: [
-        { role: "user", text: "Hi, I need help with my order." },
-        { role: "assistant", text: "I'd be happy to help! Could you provide your order number?" },
-      ],
+      scenario_name: scenario.name,
+      outcome: result.outcome,
+      metrics: result.metrics,
+      issues: result.issues,
+      messages: result.messages,
     });
+
+    const audit = makeAuditEmitter(`sim:${run.id}`, tenantId);
+    const now = new Date().toISOString();
+    const transitions: JourneyHistoryEntry[] = result.visitedNodes.map((nodeId) => ({ nodeId, timestamp: now }));
+    await emitJourneyTransitions(audit, journey.id, undefined, transitions);
+    await emitAuditFromActions(audit, result.actions, { journeyId: journey.id });
 
     return NextResponse.json({ run });
   } catch {

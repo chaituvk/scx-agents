@@ -1,3 +1,5 @@
+import type { ConditionExpression } from "@/lib/journey/schema";
+
 export type NodeType = 
   | "start"
   | "intent"
@@ -6,6 +8,10 @@ export type NodeType =
   | "condition"
   | "action"
   | "api"
+  | "llm_extract"
+  | "llm_draft"
+  | "policy_check"
+  | "tool_call"
   | "transfer"
   | "end";
 
@@ -22,7 +28,7 @@ export interface FlowEdge {
   source: string;
   target: string;
   label?: string;
-  condition?: string;
+  condition?: string | ConditionExpression;
 }
 
 export interface Journey {
@@ -32,7 +38,7 @@ export interface Journey {
   status: "draft" | "active" | "archived";
   nodes: FlowNode[];
   edges: FlowEdge[];
-  variables: string[];
+  variables: string[] | Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
