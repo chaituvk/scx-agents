@@ -14,6 +14,7 @@ const PUBLIC_PATHS = [
   "/api/conversations",
   "/api/dialog/execute",
   "/api/dialog/stream",
+  "/api/orchestrator",
   "/api/widget",
   "/widget.js",
 ];

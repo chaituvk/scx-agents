@@ -44,22 +44,28 @@ function keywordFallback(message: string, session?: TriageInput["session"]): Tri
   // Default: free-form chat → general agent. Knowledge/workflow/tool/escalation
   // each match on explicit signals; everything else (greetings, smalltalk,
   // acknowledgments, vague questions) lands on general.
+  //
+  // Ordering matters: substantive wh-questions fire BEFORE workflow keyword
+  // matching so "What is your return window?" routes to RAG instead of being
+  // captured by the \breturn\b workflow branch. A wh-question about a
+  // workflow concept ("what is your refund policy") is a knowledge query;
+  // a workflow trigger is phrased without a wh-word ("I need a refund").
   let subAgent: SubAgentName = "general";
   let intent = "general_chat";
   if (/\b(human|manager|agent|representative)\b/.test(m)) {
     subAgent = "escalation";
     intent = "escalate";
+  } else if (/\b(what|how|why|when|where|who)\b/.test(m) && m.split(/\s+/).length >= 4) {
+    // Substantive wh-question → likely a knowledge query worth retrieving for.
+    // Short wh-questions ("what?", "how come?") fall through to general.
+    subAgent = "rag";
+    intent = "knowledge_query";
   } else if (/\b(return|refund|order|cancel|kyc)\b/.test(m)) {
     subAgent = "workflow";
     intent = "workflow";
   } else if (/\b(lookup|check|status)\b/.test(m)) {
     subAgent = "tool";
     intent = "tool_use";
-  } else if (/\b(what|how|why|when|where|who)\b/.test(m) && m.split(/\s+/).length >= 4) {
-    // Substantive wh-question → likely a knowledge query worth retrieving for.
-    // Short wh-questions ("what?", "how come?") fall through to general.
-    subAgent = "rag";
-    intent = "knowledge_query";
   }
   return { intent, subAgent, confidence: 0.4, rationale: "keyword fallback" };
 }
@@ -106,7 +112,19 @@ Return JSON with keys: intent, journeyId (optional), specialistId (optional), su
     );
     const parsed = parseJson(res.content);
     if (!parsed) return keywordFallback(input.message, input.session);
-    const subAgent = (parsed.subAgent as SubAgentName) ?? "rag";
+    // Validate the parsed JSON actually describes a triage decision, not
+    // just any JSON the LLM (or an LLM-error envelope like
+    // {"error":"No LLM provider available..."}) happened to return. Without
+    // this check, parseJson succeeds on the error envelope, parsed.subAgent
+    // is undefined, and the `?? "rag"` fallback silently routes every turn
+    // to RAG — a real bug that surfaced when running tests/orchestrator.
+    // test.js with no LLM credentials configured.
+    const VALID_SUB_AGENTS: SubAgentName[] = ["rag", "workflow", "tool", "escalation", "general"];
+    const rawSubAgent = parsed.subAgent;
+    if (typeof rawSubAgent !== "string" || !VALID_SUB_AGENTS.includes(rawSubAgent as SubAgentName)) {
+      return keywordFallback(input.message, input.session);
+    }
+    const subAgent = rawSubAgent as SubAgentName;
     let journeyId = parsed.journeyId ? String(parsed.journeyId) : undefined;
     // If the LLM didn't pick a journey but the intent has a mapped journey,
     // honor the router profile mapping.
