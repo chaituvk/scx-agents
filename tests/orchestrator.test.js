@@ -79,7 +79,7 @@ async function main() {
     );
   });
 
-  await test("escalation phrase routes to Escalation", async () => {
+  await test("escalation phrase routes to Escalation with rich handoff payload", async () => {
     const conversationId = `smoke-esc-${Date.now()}`;
     const { status, data } = await post("/api/orchestrator", {
       conversationId,
@@ -87,15 +87,58 @@ async function main() {
     });
     assert.strictEqual(status, 200);
     assertSubAgent(data, "escalation");
-    assert.ok(
-      data.actions?.some((a) => a.type === "transfer"),
-      "expected a transfer action"
-    );
+    const transfer = data.actions?.find((a) => a.type === "transfer");
+    assert.ok(transfer, "expected a transfer action");
+    const payload = transfer.payload ?? {};
+    assert.strictEqual(payload.conversationId, conversationId);
+    assert.strictEqual(payload.tenantId, TENANT);
+    assert.ok(typeof payload.summary === "string");
+    assert.ok(Array.isArray(payload.recentTranscript));
+    assert.ok(Array.isArray(payload.recentPolicyEvents));
+    assert.ok(Array.isArray(payload.topicStack));
+    assert.ok(typeof payload.createdAt === "string");
+    assert.strictEqual(payload.triggeringMessage, "Please connect me to a human agent");
+  });
+
+  await test("smalltalk routes to General", async () => {
+    const conversationId = `smoke-gen-${Date.now()}`;
+    const { status, data } = await post("/api/orchestrator", {
+      conversationId,
+      message: "Hey there, thanks!",
+    });
+    assert.strictEqual(status, 200);
+    assertSubAgent(data, "general");
+    assert.ok(typeof data.response === "string" && data.response.length > 0);
+    assert.deepStrictEqual(data.actions ?? [], []);
   });
 
   await test("missing conversationId is rejected", async () => {
     const { status } = await post("/api/orchestrator", { message: "hi" });
     assert.strictEqual(status, 400);
+  });
+
+  await test("approve endpoint validates required fields", async () => {
+    const noConv = await post("/api/orchestrator/approve", { decision: "approve", approverId: "u1" });
+    assert.strictEqual(noConv.status, 400);
+
+    const badDecision = await post("/api/orchestrator/approve", {
+      conversationId: "c1", decision: "yes", approverId: "u1",
+    });
+    assert.strictEqual(badDecision.status, 400);
+
+    const noApprover = await post("/api/orchestrator/approve", {
+      conversationId: "c1", decision: "approve",
+    });
+    assert.strictEqual(noApprover.status, 400);
+  });
+
+  await test("approve endpoint returns 404 when no pending approval", async () => {
+    const conversationId = `smoke-noapproval-${Date.now()}`;
+    const { status, data } = await post("/api/orchestrator/approve", {
+      conversationId, decision: "approve", approverId: "supervisor-1",
+    });
+    assert.strictEqual(status, 404);
+    assert.ok(/no pending approval/i.test(data.error ?? ""));
   });
 
   await test("missing message is rejected", async () => {

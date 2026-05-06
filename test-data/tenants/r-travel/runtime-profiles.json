@@ -1,0 +1,51 @@
+{
+  "profiles": [
+    {
+      "id": "rp-rtravel-router",
+      "tenant_id": "r-travel",
+      "name": "rtravel_router",
+      "kind": "router",
+      "status": "active",
+      "description": "Routes booking, cancellation, and disruption requests",
+      "allowed_journeys": ["journey-5", "journey-6", "journey-rtravel-disruption-hybrid"],
+      "allowed_tools": [],
+      "allowed_slots": ["intent", "journey_id", "detected_intent"],
+      "guardrails": ["Do not guarantee visa or border outcomes"],
+      "policies": [],
+      "config": {
+        "intents": [
+          {"intent": "booking", "journey_id": "journey-5"},
+          {"intent": "cancellation", "journey_id": "journey-6"},
+          {"intent": "travel_disruption", "journey_id": "journey-rtravel-disruption-hybrid"}
+        ]
+      }
+    },
+    {
+      "id": "rp-rtravel-disruption-specialist",
+      "tenant_id": "r-travel",
+      "name": "rtravel_disruption_specialist",
+      "kind": "specialist",
+      "status": "active",
+      "description": "Handles disrupted travel, rebooking, and high-value refund review",
+      "allowed_journeys": ["journey-rtravel-disruption-hybrid"],
+      "allowed_tools": ["order_lookup", "escalate_to_human"],
+      "allowed_slots": ["disruption_description", "booking_ref", "destination", "change_reason", "refund_amount", "booking_total", "escalation_required"],
+      "guardrails": ["Never guarantee visa outcomes", "Never waive airline-controlled fees without approval"],
+      "policies": [
+        {
+          "id": "rtravel_refund_over_1000",
+          "effect": "escalate",
+          "when": {"op": "gt", "var": "refund_amount", "value": 1000},
+          "reason": "Travel refund exceeds RTravel escalation threshold"
+        },
+        {
+          "id": "rtravel_visa_topic",
+          "effect": "escalate",
+          "when": {"op": "contains", "var": "change_reason", "value": "visa"},
+          "reason": "Visa or document issues require specialist review"
+        }
+      ],
+      "config": {"tone": "enthusiastic"}
+    }
+  ]
+}

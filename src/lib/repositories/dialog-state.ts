@@ -1,4 +1,4 @@
-import { query, getOne, run } from "@/lib/db";
+import { query, getOne, run, isPostgres } from "@/lib/db";
 import { Repository } from "./base";
 
 export interface DialogState {
@@ -11,11 +11,19 @@ export interface DialogState {
   history?: any[];
   context?: Record<string, any>;
   done?: number;
+  // Session state extension (Stage 2). Nullable for back-compat; populated by
+  // orchestrator + sub-agents in Stage 3+.
+  active_agent?: string | null;
+  last_intent?: string | null;
+  pending_action?: Record<string, any> | null;
+  pending_approval?: Record<string, any> | null;
+  topic_stack?: any[] | null;
+  handoff_state?: Record<string, any> | null;
   created_at?: string;
   updated_at?: string;
 }
 
-const JSON_FIELDS = ["variables", "history", "context"];
+const JSON_FIELDS = ["variables", "history", "context", "pending_action", "pending_approval", "topic_stack", "handoff_state"];
 
 class DialogStateRepo extends Repository<DialogState> {
   constructor() {
@@ -32,6 +40,11 @@ class DialogStateRepo extends Repository<DialogState> {
     return row ? (this.parseJsonFields(row, JSON_FIELDS) as DialogState) : null;
   }
 
+  async findByConversationForTenant(conversationId: string, tenantId: string): Promise<DialogState | null> {
+    const row = await getOne("SELECT * FROM dialog_states WHERE conversation_id = $1 AND tenant_id = $2", [conversationId, tenantId]);
+    return row ? (this.parseJsonFields(row, JSON_FIELDS) as DialogState) : null;
+  }
+
   async findAll(tenantId?: string): Promise<DialogState[]> {
     const result = tenantId
       ? await query("SELECT * FROM dialog_states WHERE tenant_id = $1 ORDER BY updated_at DESC LIMIT 200", [tenantId])
@@ -45,10 +58,15 @@ class DialogStateRepo extends Repository<DialogState> {
     const str = this.stringifyJsonFields(data, JSON_FIELDS);
 
     await run(
-      `INSERT INTO dialog_states (id, tenant_id, conversation_id, journey_id, current_node_id, variables, history, context, done, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      `INSERT INTO dialog_states (id, tenant_id, conversation_id, journey_id, current_node_id, variables, history, context, done,
+         active_agent, last_intent, pending_action, pending_approval, topic_stack, handoff_state,
+         created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
       [id, str.tenant_id ?? "r-mobile", str.conversation_id, str.journey_id ?? null, str.current_node_id ?? null,
-        str.variables ?? null, str.history ?? null, str.context ?? null, str.done ?? 0, now, now]
+        str.variables ?? null, str.history ?? null, str.context ?? null, str.done ?? 0,
+        str.active_agent ?? null, str.last_intent ?? null,
+        str.pending_action ?? null, str.pending_approval ?? null, str.topic_stack ?? null, str.handoff_state ?? null,
+        now, now]
     );
 
     return { ...data, id, created_at: now, updated_at: now } as DialogState;
@@ -85,6 +103,69 @@ class DialogStateRepo extends Repository<DialogState> {
       return (await this.findByConversation(conversationId))!;
     }
     return this.create({ conversation_id: conversationId, ...data } as DialogState);
+  }
+
+  async upsertByConversationForTenant(
+    tenantId: string,
+    conversationId: string,
+    data: Partial<DialogState>,
+  ): Promise<DialogState> {
+    const existing = await this.findByConversationForTenant(conversationId, tenantId);
+    if (existing) {
+      await this.update(existing.id, data);
+      return (await this.findByConversationForTenant(conversationId, tenantId))!;
+    }
+    return this.create({ tenant_id: tenantId, conversation_id: conversationId, ...data } as DialogState);
+  }
+
+  // Atomic write of dialog_states.context.ephemeral. Mode "set" overwrites the
+  // ephemeral subkey; mode "merge" shallow-merges patch into the existing
+  // value via PG's jsonb || or SQLite's json_patch (RFC 7396). Both modes
+  // preserve sibling keys under context (e.g. lastMessage, auditTraceId).
+  // Lossless across backends because the UPDATE runs as a single SQL
+  // statement; no read-then-write race window after the row exists.
+  async writeContextEphemeral(
+    tenantId: string,
+    conversationId: string,
+    patch: Record<string, unknown>,
+    mode: "set" | "merge",
+  ): Promise<DialogState> {
+    const existing = await this.findByConversationForTenant(conversationId, tenantId);
+    if (!existing) {
+      return this.create({
+        tenant_id: tenantId,
+        conversation_id: conversationId,
+        context: { ephemeral: patch },
+      });
+    }
+
+    const patchJson = JSON.stringify(patch);
+    const now = new Date().toISOString();
+
+    if (isPostgres()) {
+      const newValueExpr = mode === "set"
+        ? `$1::jsonb`
+        : `coalesce(context->'ephemeral', '{}'::jsonb) || $1::jsonb`;
+      await run(
+        `UPDATE dialog_states
+         SET context = jsonb_set(coalesce(context, '{}'::jsonb), '{ephemeral}', ${newValueExpr}, true),
+             updated_at = $2
+         WHERE id = $3`,
+        [patchJson, now, existing.id],
+      );
+    } else {
+      const newValueExpr = mode === "set"
+        ? `json($1)`
+        : `json_patch(coalesce(json_extract(context, '$.ephemeral'), '{}'), $1)`;
+      await run(
+        `UPDATE dialog_states
+         SET context = json_set(coalesce(context, '{}'), '$.ephemeral', ${newValueExpr}),
+             updated_at = $2
+         WHERE id = $3`,
+        [patchJson, now, existing.id],
+      );
+    }
+    return (await this.findById(existing.id))!;
   }
 
   async delete(id: string): Promise<boolean> {

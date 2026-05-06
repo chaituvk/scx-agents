@@ -45,6 +45,7 @@ interface FlowEdge {
   source: string;
   target: string;
   label?: string;
+  condition?: string;
 }
 
 const NODE_TYPES: { type: NodeType; label: string; icon: typeof Play; color: string; desc: string }[] = [
@@ -217,11 +218,20 @@ export default function FlowBuilderPage() {
     return `M ${sx} ${sy} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${ty}`;
   };
 
+  const edgesForRuntime = edges.map((edge) => {
+    const sourceNode = nodes.find((n) => n.id === edge.source);
+    if (sourceNode?.type === "condition" && edge.label?.toLowerCase() === "yes" && sourceNode.data.condition) {
+      return { ...edge, condition: sourceNode.data.condition };
+    }
+    return edge;
+  });
+
   const saveJourney = async () => {
     const payload = {
       name: journeyName,
       description: "Created in flow builder",
       status: "draft",
+      execution_mode: activeJourney?.execution_mode || "deterministic",
       nodes: nodes.map((n) => ({
         id: n.id,
         type: n.type,
@@ -229,7 +239,7 @@ export default function FlowBuilderPage() {
         position: { x: n.x, y: n.y },
         data: n.data,
       })),
-      edges,
+      edges: edgesForRuntime,
       variables: [...new Set(nodes.filter((n) => n.data.variable).map((n) => n.data.variable))],
     };
 
@@ -238,10 +248,12 @@ export default function FlowBuilderPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    const data = await res.json();
     if (res.ok) {
-      const data = await res.json();
       setJourneys((prev) => [...prev, data.journey]);
       alert(`Journey "${journeyName}" saved!`);
+    } else {
+      alert(data.error || "Failed to save journey");
     }
   };
 
@@ -264,6 +276,7 @@ export default function FlowBuilderPage() {
         source: e.source,
         target: e.target,
         label: e.label,
+        condition: e.condition,
       }))
     );
     setSelectedNodeId(null);

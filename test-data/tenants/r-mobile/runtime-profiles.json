@@ -1,0 +1,45 @@
+{
+  "profiles": [
+    {
+      "id": "rp-rm-router",
+      "tenant_id": "r-mobile",
+      "name": "rm_router",
+      "kind": "router",
+      "status": "active",
+      "description": "Routes telecom/device support requests to R-Mobile journeys",
+      "allowed_journeys": ["journey-1", "journey-2", "journey-rm-device-protection-hybrid"],
+      "allowed_tools": [],
+      "allowed_slots": ["intent", "journey_id", "detected_intent"],
+      "guardrails": ["Do not route to another tenant"],
+      "policies": [],
+      "config": {
+        "intents": [
+          {"intent": "device_claim", "journey_id": "journey-rm-device-protection-hybrid"},
+          {"intent": "device_troubleshooting", "journey_id": "journey-1"},
+          {"intent": "plan_upgrade", "journey_id": "journey-2"}
+        ]
+      }
+    },
+    {
+      "id": "rp-rm-device-specialist",
+      "tenant_id": "r-mobile",
+      "name": "rm_device_specialist",
+      "kind": "specialist",
+      "status": "active",
+      "description": "Handles damaged device claims and account credits",
+      "allowed_journeys": ["journey-rm-device-protection-hybrid"],
+      "allowed_tools": ["order_lookup", "escalate_to_human"],
+      "allowed_slots": ["claim_description", "order_number", "damage_type", "account_credit_amount", "order_total", "within_window", "approval_required"],
+      "guardrails": ["Never promise replacement before eligibility checks", "Never approve account credits over threshold"],
+      "policies": [
+        {
+          "id": "rm_credit_over_300",
+          "effect": "require_approval",
+          "when": {"op": "gt", "var": "account_credit_amount", "value": 300},
+          "reason": "Account credit exceeds R-Mobile approval threshold"
+        }
+      ],
+      "config": {"tone": "professional"}
+    }
+  ]
+}

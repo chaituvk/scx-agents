@@ -4,26 +4,30 @@
       "id": "journey-3",
       "tenant_id": "ichiba",
       "name": "Return & Refund Flow",
-      "description": "Handles returns",
+      "description": "Deterministic return/refund workflow with opened-item escalation",
       "execution_mode": "deterministic",
       "status": "active",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "nodes": [
         {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
         {"id":"n2","type":"message","label":"Greeting","position":{"x":100,"y":200},"data":{"text":"I can help with your return."}},
         {"id":"n3","type":"input","label":"Order #","position":{"x":100,"y":300},"data":{"prompt":"Order number?","variable":"order_number"}},
-        {"id":"n4","type":"condition","label":"Window?","position":{"x":100,"y":400},"data":{"variable":"within_window","condition":"eq yes"}},
-        {"id":"n5","type":"message","label":"Process","position":{"x":300,"y":400},"data":{"text":"Great! Processing."}},
-        {"id":"n6","type":"end","label":"End","position":{"x":300,"y":500},"data":{}}
+        {"id":"n4","type":"input","label":"Packaging","position":{"x":100,"y":400},"data":{"prompt":"Is the item unopened with original packaging? (yes/no)","variable":"unopened"}},
+        {"id":"n5","type":"condition","label":"Returnable?","position":{"x":100,"y":500},"data":{"variable":"unopened","condition":"eq yes"}},
+        {"id":"n6","type":"message","label":"Approved","position":{"x":300,"y":500},"data":{"text":"Great. Order {{order_number}} is eligible for standard return processing."}},
+        {"id":"n7","type":"transfer","label":"Specialist","position":{"x":0,"y":500},"data":{"department":"Returns","reason":"Opened item return review"}},
+        {"id":"n8","type":"end","label":"End","position":{"x":300,"y":620},"data":{}}
       ],
       "edges": [
         {"id":"e1","source":"n1","target":"n2"},
         {"id":"e2","source":"n2","target":"n3"},
         {"id":"e3","source":"n3","target":"n4"},
-        {"id":"e4","source":"n4","target":"n5","condition":"eq yes"},
-        {"id":"e5","source":"n5","target":"n6"}
+        {"id":"e4","source":"n4","target":"n5"},
+        {"id":"e5","source":"n5","target":"n6","condition":"eq yes"},
+        {"id":"e6","source":"n5","target":"n7"},
+        {"id":"e7","source":"n6","target":"n8"}
       ],
-      "variables": ["order_number","within_window"]
+      "variables": ["order_number","unopened"]
     },
     {
       "id": "journey-4",
@@ -36,17 +40,58 @@
       "nodes": [
         {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
         {"id":"n2","type":"input","label":"Order #","position":{"x":100,"y":200},"data":{"prompt":"Order number?","variable":"order_number"}},
-        {"id":"n3","type":"api","label":"Lookup","position":{"x":100,"y":300},"data":{"endpoint":"/api/orders/track","params":["order_number"]}},
-        {"id":"n4","type":"message","label":"Status","position":{"x":100,"y":400},"data":{"text":"Your order is on the way!"}},
-        {"id":"n5","type":"end","label":"End","position":{"x":100,"y":500},"data":{}}
+        {"id":"n3","type":"message","label":"Status","position":{"x":100,"y":300},"data":{"text":"Order {{order_number}} is on the way."}},
+        {"id":"n4","type":"end","label":"End","position":{"x":100,"y":400},"data":{}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"},
+        {"id":"e2","source":"n2","target":"n3"},
+        {"id":"e3","source":"n3","target":"n4"}
+      ],
+      "variables": ["order_number"]
+    },
+    {
+      "id": "journey-ichiba-high-value-refund-hybrid",
+      "tenant_id": "ichiba",
+      "name": "High Value Refund Review",
+      "description": "Hybrid e-commerce refund flow with item reason extraction and policy threshold",
+      "execution_mode": "hybrid",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"message","label":"Intro","position":{"x":100,"y":200},"data":{"text":"I can help review a refund request. Please describe the issue and include your order number."}},
+        {"id":"n3","type":"input","label":"Refund Details","position":{"x":100,"y":300},"data":{"prompt":"What happened with the item?","variable":"refund_description"}},
+        {"id":"n4","type":"llm_extract","label":"Extract Refund Slots","position":{"x":100,"y":400},"data":{"profile":"ichiba_refund_specialist","allowed_slots":["order_number","refund_reason","refund_amount"]}},
+        {"id":"n5","type":"tool_call","label":"Lookup Order","position":{"x":100,"y":500},"data":{"profile":"ichiba_refund_specialist","tool":"order_lookup","input":{"order_number":"{{order_number}}"},"output_map":{"order_id":"order_number","total":"order_total","within_return_window":"within_window"}}},
+        {"id":"n6","type":"policy_check","label":"Refund Policy","position":{"x":100,"y":600},"data":{"profile":"ichiba_refund_specialist"}},
+        {"id":"n7","type":"condition","label":"Approval Required?","position":{"x":100,"y":700},"data":{"variable":"approval_required","condition":"eq true"}},
+        {"id":"n8","type":"llm_draft","label":"Review Draft","position":{"x":0,"y":820},"data":{"profile":"ichiba_refund_specialist","instruction":"Explain that a high value refund needs approval and reassure the customer.","must_not_claim":["refund approved"],"fallback":"This refund requires specialist approval before it can be processed. I have sent the order and reason for review."}},
+        {"id":"n9","type":"transfer","label":"Refund Specialist","position":{"x":0,"y":940},"data":{"department":"Refunds","reason":"High value refund approval"}},
+        {"id":"n10","type":"llm_draft","label":"Standard Draft","position":{"x":320,"y":820},"data":{"profile":"ichiba_refund_specialist","instruction":"Explain standard refund next steps with empathy.","must_not_claim":["instant refund"],"fallback":"Your refund request can continue under standard processing. Refunds usually appear in 3-5 business days after approval."}},
+        {"id":"n11","type":"end","label":"End","position":{"x":320,"y":940},"data":{"text":"Thank you for shopping with Ichiba."}}
       ],
       "edges": [
         {"id":"e1","source":"n1","target":"n2"},
         {"id":"e2","source":"n2","target":"n3"},
         {"id":"e3","source":"n3","target":"n4"},
-        {"id":"e4","source":"n4","target":"n5"}
+        {"id":"e4","source":"n4","target":"n5"},
+        {"id":"e5","source":"n5","target":"n6"},
+        {"id":"e6","source":"n6","target":"n7"},
+        {"id":"e7","source":"n7","target":"n8","condition":"eq true"},
+        {"id":"e8","source":"n7","target":"n10"},
+        {"id":"e9","source":"n8","target":"n9"},
+        {"id":"e10","source":"n10","target":"n11"}
       ],
-      "variables": ["order_number"]
+      "variables": {
+        "refund_description": "",
+        "order_number": "",
+        "refund_reason": "",
+        "refund_amount": "",
+        "order_total": "",
+        "within_window": "",
+        "approval_required": ""
+      }
     }
   ]
 }

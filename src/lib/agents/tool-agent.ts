@@ -2,6 +2,12 @@
 
 import { extractSlotSkill, actSkill, respondSkill } from "../skills";
 import { policyChecker } from "../policy";
+import {
+  loadSpecialistProfile,
+  applyGuardrailsToSystemPrompt,
+  auditProfileBinding,
+  isToolAllowedByProfile,
+} from "./profile-binding";
 import type {
   SubAgent,
   SubAgentRunInput,
@@ -47,7 +53,31 @@ export const toolAgent: SubAgent = {
   },
 
   async run(input: SubAgentRunInput, ctx: SkillContext): Promise<SubAgentRunOutput> {
+    // Stage 14: bind to a runtime specialist profile when one is
+    // available. allowed_tools (if any) is enforced before slot
+    // extraction so we don't even ask the LLM to extract for a
+    // disallowed tool. Guardrails reach the summarize prompt below.
+    const profile = await loadSpecialistProfile(ctx.tenantId, input.triage.specialistId);
+    await auditProfileBinding(ctx.audit, "tool", profile, input.triage.specialistId);
+
     const plan = planTool(input.message);
+
+    if (!isToolAllowedByProfile(profile, plan.tool)) {
+      const profileName = profile?.name ?? "unknown";
+      await ctx.audit.emit("policy_event", {
+        decision: "deny",
+        reason: `Tool '${plan.tool}' not in allowed_tools for profile '${profileName}'`,
+        target: `tool:${plan.tool}`,
+        profile: profileName,
+      });
+      return {
+        response: "I can't run that for you — the active runtime profile doesn't permit this tool.",
+        variables: input.variables,
+        done: true,
+        actions: [],
+      };
+    }
+
     const extracted = await extractSlotSkill.run(
       { message: input.message, slotSchema: plan.schema },
       ctx
@@ -90,9 +120,10 @@ export const toolAgent: SubAgent = {
 
     const actResult = await actSkill.run({ tool: plan.tool, params }, ctx);
 
+    const summarySystemPrompt = applyGuardrailsToSystemPrompt(SUMMARIZE_SYSTEM, profile);
     const summary = await respondSkill.run(
       {
-        systemPrompt: SUMMARIZE_SYSTEM,
+        systemPrompt: summarySystemPrompt,
         userMessage: input.message,
         history: input.context.history,
         variables: {

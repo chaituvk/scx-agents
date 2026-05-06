@@ -1,0 +1,125 @@
+{
+  "scenarios": [
+    {
+      "id": "sc-rm-device-warranty-happy",
+      "tenant_id": "r-mobile",
+      "journey_id": "journey-1",
+      "name": "Device troubleshooting under warranty",
+      "description": "Customer provides model and confirms warranty",
+      "category": "behavior",
+      "status": "active",
+      "turns": [
+        {"user": "Galaxy S24"},
+        {"user": "yes"}
+      ],
+      "expectations": {
+        "visitedNodes": ["n1", "n3", "n5", "n6"],
+        "variables": {"device_model": "Galaxy S24", "under_warranty": "yes"},
+        "forbiddenMessages": ["call back later"]
+      },
+      "tags": ["deterministic", "warranty", "happy-path"]
+    },
+    {
+      "id": "sc-rm-device-warranty-fee-disclosure",
+      "tenant_id": "r-mobile",
+      "journey_id": "journey-1",
+      "name": "Device troubleshooting out of warranty",
+      "description": "Customer is outside warranty and should receive fee disclosure",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "iPhone 14"},
+        {"user": "no"}
+      ],
+      "expectations": {
+        "visitedNodes": ["n7"],
+        "variables": {"under_warranty": "no"},
+        "forbiddenMessages": ["free replacement"]
+      },
+      "tags": ["deterministic", "fee-disclosure"]
+    },
+    {
+      "id": "sc-rm-hybrid-device-credit-standard",
+      "tenant_id": "r-mobile",
+      "journey_id": "journey-rm-device-protection-hybrid",
+      "name": "Hybrid device claim standard credit",
+      "description": "Damaged device claim stays below approval threshold",
+      "category": "behavior",
+      "status": "active",
+      "turns": [
+        {"user": "My phone screen cracked, order 12345, credit should be 100"}
+      ],
+      "runtime": {
+        "required_profiles": ["rm_device_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "12345",
+            "status": "delivered",
+            "total": 149.99,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "visitedNodes": ["n4", "n5", "n6", "n7", "n10"],
+        "forbiddenMessages": ["credit approved"]
+      },
+      "tags": ["hybrid", "llm_extract", "tool_call"]
+    },
+    {
+      "id": "sc-rm-hybrid-device-credit-approval",
+      "tenant_id": "r-mobile",
+      "journey_id": "journey-rm-device-protection-hybrid",
+      "name": "Hybrid device claim over credit threshold",
+      "description": "Credit over 300 must require approval",
+      "category": "policy",
+      "status": "active",
+      "turns": [
+        {"user": "My device is water damaged, order 99111, I need a 450 credit"}
+      ],
+      "runtime": {
+        "required_profiles": ["rm_device_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "99111",
+            "status": "delivered",
+            "total": 449.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "visitedNodes": ["n6", "n8", "n9"],
+        "forbiddenMessages": ["credit approved", "refund approved"]
+      },
+      "tags": ["hybrid", "approval-threshold"]
+    },
+    {
+      "id": "sc-rm-cross-tenant-isolation",
+      "tenant_id": "r-mobile",
+      "journey_id": "journey-rm-device-protection-hybrid",
+      "name": "R-Mobile journey never uses travel specialist",
+      "description": "Ensures fixture binds only R-Mobile runtime profile names",
+      "category": "technical",
+      "status": "active",
+      "turns": [
+        {"user": "Cracked phone order 12345"}
+      ],
+      "runtime": {
+        "required_profiles": ["rm_device_specialist"],
+        "tool_mocks": {
+          "order_lookup": {
+            "order_id": "12345",
+            "status": "delivered",
+            "total": 120.00,
+            "within_return_window": true
+          }
+        }
+      },
+      "expectations": {
+        "forbiddenMessages": ["visa", "travel specialist"]
+      },
+      "tags": ["tenant-isolation"]
+    }
+  ]
+}

@@ -4,24 +4,29 @@
       "id": "journey-1",
       "tenant_id": "r-mobile",
       "name": "Device Troubleshooting",
-      "description": "Helps customers troubleshoot device issues",
+      "description": "Deterministic device troubleshooting with warranty branch",
       "execution_mode": "deterministic",
       "status": "active",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "nodes": [
         {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
         {"id":"n2","type":"message","label":"Greeting","position":{"x":100,"y":200},"data":{"text":"I can help troubleshoot your device."}},
-        {"id":"n3","type":"input","label":"Device Model","position":{"x":100,"y":300},"data":{"prompt":"What device model?","variable":"device_model"}},
-        {"id":"n4","type":"condition","label":"Under Warranty?","position":{"x":100,"y":400},"data":{"variable":"under_warranty","condition":"eq yes"}},
-        {"id":"n5","type":"message","label":"Warranty","position":{"x":300,"y":400},"data":{"text":"Great! You're under warranty."}},
-        {"id":"n6","type":"end","label":"End","position":{"x":300,"y":500},"data":{}}
+        {"id":"n3","type":"input","label":"Device Model","position":{"x":100,"y":300},"data":{"prompt":"What device model are you using?","variable":"device_model"}},
+        {"id":"n4","type":"input","label":"Warranty","position":{"x":100,"y":400},"data":{"prompt":"Is it under warranty? (yes/no)","variable":"under_warranty"}},
+        {"id":"n5","type":"condition","label":"Under Warranty?","position":{"x":100,"y":500},"data":{"variable":"under_warranty","condition":"eq yes"}},
+        {"id":"n6","type":"message","label":"Warranty Path","position":{"x":300,"y":500},"data":{"text":"Great. For {{device_model}}, I can help with warranty troubleshooting and replacement eligibility."}},
+        {"id":"n7","type":"message","label":"Self Serve","position":{"x":0,"y":500},"data":{"text":"I can still help with basic troubleshooting. Repairs outside warranty may include fees."}},
+        {"id":"n8","type":"end","label":"End","position":{"x":300,"y":620},"data":{"text":"Thanks for contacting R-Mobile."}}
       ],
       "edges": [
         {"id":"e1","source":"n1","target":"n2"},
         {"id":"e2","source":"n2","target":"n3"},
         {"id":"e3","source":"n3","target":"n4"},
-        {"id":"e4","source":"n4","target":"n5","condition":"eq yes"},
-        {"id":"e5","source":"n5","target":"n6"}
+        {"id":"e4","source":"n4","target":"n5"},
+        {"id":"e5","source":"n5","target":"n6","condition":"eq yes"},
+        {"id":"e6","source":"n5","target":"n7"},
+        {"id":"e7","source":"n6","target":"n8"},
+        {"id":"e8","source":"n7","target":"n8"}
       ],
       "variables": ["device_model","under_warranty"]
     },
@@ -29,7 +34,7 @@
       "id": "journey-2",
       "tenant_id": "r-mobile",
       "name": "Plan Upgrade Assistant",
-      "description": "AI assistant for plan upgrades",
+      "description": "LLM assistant for plan upgrades and disclosures",
       "execution_mode": "llm",
       "status": "active",
       "version": "1.0.0",
@@ -37,10 +42,51 @@
         {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
         {"id":"n2","type":"end","label":"End","position":{"x":100,"y":200},"data":{"text":"Thank you!"}}
       ],
-      "edges": [
-        {"id":"e1","source":"n1","target":"n2"}
-      ],
+      "edges": [{"id":"e1","source":"n1","target":"n2"}],
       "variables": []
+    },
+    {
+      "id": "journey-rm-device-protection-hybrid",
+      "tenant_id": "r-mobile",
+      "name": "Device Protection Claim",
+      "description": "Hybrid regulated workflow for damaged-device claims, credits, and approval boundaries",
+      "execution_mode": "hybrid",
+      "status": "active",
+      "version": "1.0.0",
+      "nodes": [
+        {"id":"n1","type":"start","label":"Start","position":{"x":100,"y":100},"data":{}},
+        {"id":"n2","type":"message","label":"Claim Intro","position":{"x":100,"y":200},"data":{"text":"I can help with a device protection claim. Tell me what happened and include your account or order number if you have it."}},
+        {"id":"n3","type":"input","label":"Claim Details","position":{"x":100,"y":300},"data":{"prompt":"What happened to the device?","variable":"claim_description"}},
+        {"id":"n4","type":"llm_extract","label":"Extract Claim Slots","position":{"x":100,"y":400},"data":{"profile":"rm_device_specialist","allowed_slots":["order_number","damage_type","account_credit_amount"]}},
+        {"id":"n5","type":"tool_call","label":"Lookup Device Order","position":{"x":100,"y":500},"data":{"profile":"rm_device_specialist","tool":"order_lookup","input":{"order_number":"{{order_number}}"},"output_map":{"order_id":"order_number","total":"order_total","within_return_window":"within_window"}}},
+        {"id":"n6","type":"policy_check","label":"Credit Policy","position":{"x":100,"y":600},"data":{"profile":"rm_device_specialist"}},
+        {"id":"n7","type":"condition","label":"Approval Required?","position":{"x":100,"y":700},"data":{"variable":"approval_required","condition":"eq true"}},
+        {"id":"n8","type":"llm_draft","label":"Manager Review Draft","position":{"x":0,"y":820},"data":{"profile":"rm_device_specialist","instruction":"Explain that the credit request needs manager approval and summarize next steps.","must_not_claim":["credit approved","refund approved"],"fallback":"This claim needs manager approval before credit can be issued. I have attached the device and order details for review."}},
+        {"id":"n9","type":"transfer","label":"Manager Approval","position":{"x":0,"y":940},"data":{"department":"Device Claims","reason":"Credit exceeds approval threshold or policy requires review"}},
+        {"id":"n10","type":"llm_draft","label":"Eligible Draft","position":{"x":320,"y":820},"data":{"profile":"rm_device_specialist","instruction":"Explain that the claim is eligible to continue and ask the customer to confirm shipping details.","must_not_claim":["final approval"],"fallback":"The claim is eligible to continue. Please confirm your shipping details so we can proceed."}},
+        {"id":"n11","type":"end","label":"End","position":{"x":320,"y":940},"data":{"text":"Thanks for working with R-Mobile."}}
+      ],
+      "edges": [
+        {"id":"e1","source":"n1","target":"n2"},
+        {"id":"e2","source":"n2","target":"n3"},
+        {"id":"e3","source":"n3","target":"n4"},
+        {"id":"e4","source":"n4","target":"n5"},
+        {"id":"e5","source":"n5","target":"n6"},
+        {"id":"e6","source":"n6","target":"n7"},
+        {"id":"e7","source":"n7","target":"n8","condition":"eq true"},
+        {"id":"e8","source":"n7","target":"n10"},
+        {"id":"e9","source":"n8","target":"n9"},
+        {"id":"e10","source":"n10","target":"n11"}
+      ],
+      "variables": {
+        "claim_description": "",
+        "order_number": "",
+        "damage_type": "",
+        "account_credit_amount": "",
+        "order_total": "",
+        "within_window": "",
+        "approval_required": ""
+      }
     }
   ]
 }

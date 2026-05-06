@@ -50,6 +50,23 @@ export interface TriageInput {
   message: string;
   history: Message[];
   knownIntents: string[];
+  /**
+   * Session context — when a workflow is already active, triage should
+   * default to continuing it unless the user clearly switches topic.
+   */
+  session?: {
+    activeJourneyId?: string | null;
+    currentNodeId?: string | null;
+    activeAgent?: SubAgentName | null;
+    lastIntent?: string | null;
+    topicStackDepth?: number;
+  };
+  /**
+   * Tenant intent → journey map (from router runtime profile config.intents).
+   * When triage classifies an intent that has a mapped journey, the orchestrator
+   * routes there directly. Empty for tenants without a router profile.
+   */
+  intentMap?: Record<string, string>;
 }
 export interface TriageOutput {
   intent: string;
@@ -141,6 +158,7 @@ export interface Profile {
 export type MemoryLayer = "ephemeral" | "profile" | "history" | "knowledge";
 
 export interface MemoryQuery {
+  tenantId: string;
   conversationId: string;
   customerId?: string;
   topics?: string[];
@@ -194,7 +212,9 @@ export type AuditEventType =
   | "tool_call"
   | "policy_event"
   | "journey_transition"
-  | "supervisor_check";
+  | "supervisor_check"
+  | "escalation_handoff"
+  | "approval_decision";
 
 export interface AuditEvent {
   id: string;
@@ -210,10 +230,54 @@ export interface AuditEmitter {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Session state — single object per (tenant_id, conversation_id) replacing the
+// scattered dialog_state / conversation fields. Persisted on the dialog_states
+// row (extended with nullable JSONB columns); stage 3+ wires this into the
+// orchestrator turn contract.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface PendingAction {
+  id: string;
+  tool: string;
+  params: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface TopicFrame {
+  intent: string;
+  journeyId?: string;
+  nodeId?: string;
+  pushedAt: string;
+}
+
+export interface HandoffState {
+  active: boolean;
+  reason?: string;
+  targetSubAgent?: SubAgentName;
+  toHuman?: boolean;
+}
+
+export interface SessionState {
+  tenantId: string;
+  conversationId: string;
+  activeAgent: SubAgentName | null;
+  activeJourneyId: string | null;
+  currentNodeId: string | null;
+  slots: Record<string, string | number | boolean>;
+  pendingAction: PendingAction | null;
+  pendingApproval: PendingApproval | null;
+  lastIntent: string | null;
+  topicStack: TopicFrame[];
+  handoffState: HandoffState;
+  auditTraceId: string;
+  updatedAt: string;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Sub-agents
 // ────────────────────────────────────────────────────────────────────────────
 
-export type SubAgentName = "rag" | "workflow" | "tool" | "escalation";
+export type SubAgentName = "rag" | "workflow" | "tool" | "escalation" | "general";
 
 export interface SubAgentRunInput {
   message: string;
@@ -231,6 +295,77 @@ export interface SubAgentRunOutput {
   actions: Array<{ type: string; payload: Record<string, unknown> }>;
   /** If a confirmation gate is open, the action is pending until next turn. */
   pendingAction?: { id: string; tool: string; params: Record<string, unknown> };
+  /**
+   * Set when a journey-level policy_check returned require_approval. The
+   * conversation is suspended — the next user turn is short-circuited by
+   * the orchestrator until POST /api/orchestrator/approve clears it.
+   */
+  pendingApproval?: PendingApproval;
+}
+
+/**
+ * Live-chat handoff context (Stage 9). Built by escalation-agent on
+ * transfer, persisted to dialog_states.handoff_state, and surfaced both
+ * as the transfer action's payload and the escalation_handoff audit
+ * event payload — so a live agent dashboard / Slack webhook / on-call
+ * paging integration can reconstruct the full state without re-querying.
+ */
+export interface HandoffContext {
+  conversationId: string;
+  tenantId: string;
+  customerId?: string;
+  customerProfile?: { id: string; name?: string; email?: string; tier?: string };
+
+  /** Triage intent that caused the handoff (e.g. "escalate", "policy_block"). */
+  reason: string;
+  /** The user message that triggered the escalation. */
+  triggeringMessage: string;
+
+  /** Free-text summary of the conversation so far. */
+  summary: string;
+  /** Last few turns verbatim — live agents prefer exact words. */
+  recentTranscript: Array<{ role: string; content: string }>;
+
+  /** Where the workflow was, when it was active. */
+  activeJourneyId?: string;
+  currentNodeId?: string;
+  /** Slot values collected during the conversation. */
+  variables: Record<string, string>;
+  /** Paused topics (from session-aware router, Stage 5). */
+  topicStack: TopicFrame[];
+  /** If the conversation was held for approval (Stage 7), the lock. */
+  pendingApproval?: PendingApproval;
+
+  /** Recent policy decisions (deny / require_approval) for risk context. */
+  recentPolicyEvents: Array<{
+    ts: string;
+    decision: string;
+    target?: string;
+    reason?: string;
+  }>;
+
+  createdAt: string;
+}
+
+/**
+ * Approval pause record. Persisted to dialog_states.pending_approval and
+ * mirrored on SubAgentRunOutput / OrchestratorTurnOutput when a turn ends
+ * in a held state.
+ */
+export interface PendingApproval {
+  id: string;
+  journeyId: string;
+  /** Node where execution paused — the policy_check node itself. */
+  nodeId: string;
+  /** Runtime profile the policy_check ran against, when available. */
+  profile?: string;
+  /** Policy id from the runtime decision, if the rule named one. */
+  policyId?: string;
+  /** Human-readable reason from the runtime decision. */
+  reason?: string;
+  /** The user message that triggered the pause, for approver context. */
+  triggeringMessage?: string;
+  createdAt: string;
 }
 
 export interface SubAgent {
@@ -267,6 +402,14 @@ export interface OrchestratorTurnInput {
   message: string;
   /** Existing dialog state (slots, journey position) if any. */
   variables?: Record<string, string>;
+  /**
+   * Caller-supplied routing hints. Used by /api/dialog/execute and
+   * /api/dialog/stream adapters to bypass triage when the journey is already
+   * known. When set, triage is skipped and the orchestrator routes directly
+   * to the named sub-agent / journey.
+   */
+  requestedJourneyId?: string;
+  forceSubAgent?: SubAgentName;
 }
 
 export interface OrchestratorTurnOutput {
@@ -279,4 +422,6 @@ export interface OrchestratorTurnOutput {
   supervisor: SupervisorCheckOutput;
   done: boolean;
   actions: Array<{ type: string; payload: Record<string, unknown> }>;
+  /** Mirrored from SubAgentRunOutput when the turn ended in a held state. */
+  pendingApproval?: PendingApproval;
 }

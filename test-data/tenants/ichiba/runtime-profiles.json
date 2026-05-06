@@ -1,0 +1,45 @@
+{
+  "profiles": [
+    {
+      "id": "rp-ichiba-router",
+      "tenant_id": "ichiba",
+      "name": "ichiba_router",
+      "kind": "router",
+      "status": "active",
+      "description": "Routes marketplace requests to return, shipping, or refund review journeys",
+      "allowed_journeys": ["journey-3", "journey-4", "journey-ichiba-high-value-refund-hybrid"],
+      "allowed_tools": [],
+      "allowed_slots": ["intent", "journey_id", "detected_intent"],
+      "guardrails": ["Do not route counterfeit or illegal goods requests to standard returns"],
+      "policies": [],
+      "config": {
+        "intents": [
+          {"intent": "standard_return", "journey_id": "journey-3"},
+          {"intent": "shipping_tracking", "journey_id": "journey-4"},
+          {"intent": "high_value_refund", "journey_id": "journey-ichiba-high-value-refund-hybrid"}
+        ]
+      }
+    },
+    {
+      "id": "rp-ichiba-refund-specialist",
+      "tenant_id": "ichiba",
+      "name": "ichiba_refund_specialist",
+      "kind": "specialist",
+      "status": "active",
+      "description": "Handles refund slot extraction, order lookup, and refund policy checks",
+      "allowed_journeys": ["journey-ichiba-high-value-refund-hybrid"],
+      "allowed_tools": ["order_lookup", "process_refund", "escalate_to_human"],
+      "allowed_slots": ["refund_description", "order_number", "refund_reason", "refund_amount", "order_total", "within_window", "approval_required"],
+      "guardrails": ["Never claim refund is approved before policy check", "Never process counterfeit item returns"],
+      "policies": [
+        {
+          "id": "ichiba_refund_over_500",
+          "effect": "require_approval",
+          "when": {"op": "gt", "var": "refund_amount", "value": 500},
+          "reason": "Refund exceeds Ichiba approval threshold"
+        }
+      ],
+      "config": {"tone": "empathetic"}
+    }
+  ]
+}

@@ -182,6 +182,7 @@ export async function POST(req: NextRequest) {
 
       const step = await runAgentStep(config, {
         conversationId,
+        tenantId,
         variables: dbState.variables || {},
         history: messages,
       }, message);
@@ -261,7 +262,7 @@ export async function POST(req: NextRequest) {
       const result = await hybridEngine.handleInput(
         engineState,
         hybridState,
-        { conversationId, variables: dbState.variables || {}, history: messages },
+        { conversationId, tenantId, variables: dbState.variables || {}, history: messages },
         message
       );
 

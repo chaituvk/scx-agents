@@ -1,15 +1,39 @@
-// WorkflowAgent — multi-step procedure sub-agent driven by DialogEngine.
+// WorkflowAgent — multi-step procedure sub-agent. Dispatches journeys to
+// either DialogEngine (deterministic) or NodeLevelHybridExecutor (hybrid)
+// based on journey.execution_mode.
+//
+// Why two engines, not one: NodeLevelHybridExecutor handles every node type
+// the dialog graph supports, but its processNodeChain stops on a different
+// rule than DialogEngine — hybrid stops on done/wait while DialogEngine also
+// stops at legacy `api` nodes and on any non-set_variable action. Routing
+// existing deterministic journeys through hybrid would change message and
+// turn boundaries on already-recorded conversations. Stage 3 picks the
+// right engine per mode; Stage 4+ may unify if hybrid's chain semantics are
+// brought into line with DialogEngine's.
+//
+// Policy gating note: workflow-agent's policyChecker.validateSlotWrite /
+// validateToolCall / validateResponse run AFTER the executor has already
+// processed the corresponding nodes. They are post-hoc audit + gate (drop
+// the action from the response, emit a deny event), NOT pre-execution
+// barriers. Pre-execution policy enforcement happens inside the hybrid
+// executor itself for llm_extract / tool_call / policy_check / llm_draft
+// nodes via runtime profiles. Legacy `api` nodes have no pre-execution
+// gate — their side effects fire before policyChecker sees them.
 
-import { DialogEngine } from "../dialog/engine";
+import { DialogEngine, type DialogResult } from "../dialog/engine";
 import type { Journey as DialogJourney, DialogState as EngineState } from "../dialog/types";
+import { NodeLevelHybridExecutor } from "../runtime/hybrid-executor";
+import { loadTenantRuntime } from "../runtime/tenant-runtime";
 import { journeyRepo, dialogStateRepo } from "../repositories";
 import { policyChecker } from "../policy";
+import { emitAuditFromActions, emitJourneyTransitions, type JourneyHistoryEntry } from "../audit/from-actions";
 import type {
   SubAgent,
   SubAgentRunInput,
   SubAgentRunOutput,
   SkillContext,
   TriageOutput,
+  PendingApproval,
 } from "./types";
 
 const NO_WORKFLOW =
@@ -19,8 +43,16 @@ const SAFE_FALLBACK = "I'm not able to share that information.";
 type RawJourney = {
   id: string; name: string; description?: string; status?: string;
   nodes: unknown[]; edges?: unknown[]; variables?: unknown;
+  execution_mode?: "deterministic" | "llm" | "hybrid" | string;
   created_at?: string; updated_at?: string;
 };
+
+interface ExecutorResult {
+  messages: string[];
+  state: EngineState;
+  done: boolean;
+  actions: Array<{ type: string; payload?: Record<string, unknown> }>;
+}
 
 function toDialogJourney(j: RawJourney): DialogJourney {
   return {
@@ -34,18 +66,45 @@ function toDialogJourney(j: RawJourney): DialogJourney {
   };
 }
 
-async function resolveJourney(triage: TriageOutput): Promise<DialogJourney | null> {
+async function resolveJourney(triage: TriageOutput, tenantId: string): Promise<{ journey: DialogJourney; raw: RawJourney } | null> {
   if (triage.journeyId) {
-    const j = await journeyRepo.findById(triage.journeyId);
-    if (j) return toDialogJourney(j as RawJourney);
+    const j = await journeyRepo.findByIdForTenant(triage.journeyId, tenantId);
+    if (j) return { journey: toDialogJourney(j as RawJourney), raw: j as RawJourney };
   }
-  const all = await journeyRepo.findAll();
+  const all = await journeyRepo.findAll(tenantId);
   const active = all.find((j) => j.status === "active") ?? all[0];
-  return active ? toDialogJourney(active as RawJourney) : null;
+  return active ? { journey: toDialogJourney(active as RawJourney), raw: active as RawJourney } : null;
 }
 
 async function emitPolicy(ctx: SkillContext, target: string, d: { decision: string; reason?: string }) {
   await ctx.audit.emit("policy_event", { decision: d.decision, reason: d.reason, target });
+}
+
+function fromDialogResult(state: EngineState, result: DialogResult): ExecutorResult {
+  return {
+    messages: result.messages,
+    state,
+    done: result.done,
+    actions: result.actions.map((a) => ({ type: a.type, payload: a.payload })),
+  };
+}
+
+// Build a slot → {source, profile} map from the executor's set_variable
+// actions so workflow-agent's slot_write audit preserves provenance for
+// values that came from llm_extract or tool_call output mapping.
+function indexSlotMetadata(actions: Array<{ type: string; payload?: Record<string, unknown> }>): Map<string, { source?: string; profile?: string }> {
+  const map = new Map<string, { source?: string; profile?: string }>();
+  for (const action of actions) {
+    if (action.type !== "set_variable") continue;
+    const payload = action.payload ?? {};
+    const slot = (payload.variable ?? payload.slot) as string | undefined;
+    if (!slot) continue;
+    map.set(slot, {
+      source: payload.source as string | undefined,
+      profile: payload.profile as string | undefined,
+    });
+  }
+  return map;
 }
 
 export const workflowAgent: SubAgent = {
@@ -56,12 +115,13 @@ export const workflowAgent: SubAgent = {
   },
 
   async run(input: SubAgentRunInput, ctx: SkillContext): Promise<SubAgentRunOutput> {
-    const journey = await resolveJourney(input.triage);
-    if (!journey) {
+    const resolved = await resolveJourney(input.triage, ctx.tenantId);
+    if (!resolved) {
       return { response: NO_WORKFLOW, variables: input.variables, done: true, actions: [] };
     }
+    const { journey, raw: rawJourney } = resolved;
 
-    const persisted = await dialogStateRepo.findByConversation(ctx.conversationId);
+    const persisted = await dialogStateRepo.findByConversationForTenant(ctx.conversationId, ctx.tenantId);
     const priorVars: Record<string, string> = { ...input.variables };
     let state: EngineState;
     if (persisted && persisted.journey_id === journey.id) {
@@ -77,10 +137,97 @@ export const workflowAgent: SubAgent = {
       state.variables = { ...input.variables };
     }
 
-    const engine = new DialogEngine(journey);
-    const result = state.currentNodeId
-      ? engine.handleInput(state, input.message)
-      : engine.start(state);
+    const oldHistory: JourneyHistoryEntry[] = [...((state.history ?? []) as JourneyHistoryEntry[])];
+
+    let result: ExecutorResult;
+    if (rawJourney.execution_mode === "hybrid") {
+      // Hybrid path: tenant runtime is loaded once per turn for runtime-profile
+      // policy gating inside llm_extract / tool_call / policy_check / llm_draft.
+      const runtime = await loadTenantRuntime(ctx.tenantId);
+      const engine = new NodeLevelHybridExecutor(journey, runtime);
+      const hybridResult = state.currentNodeId
+        ? await engine.handleInput(state, input.message)
+        : await engine.start(state);
+      result = {
+        messages: hybridResult.messages,
+        state: hybridResult.state,
+        done: hybridResult.done,
+        actions: hybridResult.actions.map((a) => ({ type: a.type, payload: a.payload as Record<string, unknown> | undefined })),
+      };
+    } else {
+      // Deterministic path: DialogEngine preserves the legacy chain-stop
+      // semantics (stops at api / non-set_variable actions / input / end).
+      const engine = new DialogEngine(journey);
+      const dResult = state.currentNodeId
+        ? engine.handleInput(state, input.message)
+        : engine.start(state);
+      result = fromDialogResult(state, dResult);
+    }
+
+    // Detect a hybrid-executor pause from a policy_check node returning
+    // require_approval. The action carries paused:true + the node id; we
+    // build a PendingApproval, persist it to dialog_states, and return
+    // early. result.done is false from the executor because it's parked,
+    // not finished — the orchestrator's pre-turn check uses pending_approval
+    // (not done) to short-circuit subsequent user turns.
+    const heldAction = result.actions.find((a) =>
+      a.type === "policy_decision" &&
+      (a.payload as { effect?: string; paused?: boolean } | undefined)?.effect === "require_approval" &&
+      (a.payload as { paused?: boolean } | undefined)?.paused === true
+    );
+    if (heldAction) {
+      const payload = (heldAction.payload ?? {}) as {
+        profile?: string; policyId?: string; reason?: string; nodeId?: string;
+      };
+      const pendingApproval: PendingApproval = {
+        id: `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        journeyId: journey.id,
+        nodeId: payload.nodeId ?? result.state.currentNodeId ?? "",
+        profile: payload.profile,
+        policyId: payload.policyId,
+        reason: payload.reason,
+        triggeringMessage: input.message,
+        createdAt: new Date().toISOString(),
+      };
+
+      await ctx.audit.emit("policy_event", {
+        decision: "require_approval",
+        target: `policy_check:${pendingApproval.nodeId}`,
+        reason: pendingApproval.reason,
+      });
+
+      try {
+        await dialogStateRepo.upsertByConversationForTenant(ctx.tenantId, ctx.conversationId, {
+          journey_id: journey.id,
+          current_node_id: result.state.currentNodeId,
+          variables: result.state.variables,
+          history: result.state.history,
+          context: result.state.context,
+          pending_approval: pendingApproval as unknown as Record<string, unknown>,
+          done: 0,
+        });
+      } catch (err) {
+        console.error("[workflowAgent] pending_approval persistence failed:", err);
+        await ctx.audit.emit("policy_event", {
+          decision: "deny", target: "persistence",
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      const heldMessage =
+        result.messages.join("\n").trim() ||
+        "This step requires supervisor approval before I can continue.";
+
+      return {
+        response: heldMessage,
+        variables: result.state.variables,
+        done: false,
+        actions: [],
+        pendingApproval,
+      };
+    }
+
+    const slotMetadata = indexSlotMetadata(result.actions);
 
     // Validate slot writes vs prior variables.
     const finalVariables: Record<string, string> = { ...priorVars };
@@ -97,25 +244,32 @@ export const workflowAgent: SubAgent = {
         continue;
       }
       finalVariables[slot] = next;
-      await ctx.audit.emit("slot_write", { slot, value: next, journeyId: journey.id });
+      const meta = slotMetadata.get(slot);
+      await ctx.audit.emit("slot_write", {
+        slot, value: next, journeyId: journey.id,
+        source: meta?.source, profile: meta?.profile,
+      });
     }
     result.state.variables = finalVariables;
 
-    // Gate api_call actions through tool policy.
+    // Gate api_call actions through tool policy. Post-hoc — see file header
+    // comment. The action is dropped from the response and a policy_event is
+    // recorded, but legacy api node side effects (e.g. KYC mock setting
+    // kyc_status into variables) fire before this point.
     const allowedActions: typeof result.actions = [];
     let pendingAction: SubAgentRunOutput["pendingAction"];
     let gateMessage: string | null = null;
     for (const action of result.actions) {
       if (action.type === "api_call") {
-        const tool = String((action.payload as { endpoint?: string }).endpoint ?? "api_call");
+        const tool = String((action.payload as { endpoint?: string } | undefined)?.endpoint ?? "api_call");
         const dec = await policyChecker.validateToolCall({
-          tool, params: action.payload, variables: finalVariables,
+          tool, params: (action.payload ?? {}) as Record<string, unknown>, variables: finalVariables,
         });
         const reason = dec.decision === "allow" ? undefined : (dec as { reason: string }).reason;
         await emitPolicy(ctx, `tool:${tool}`, { decision: dec.decision, reason });
         if (dec.decision === "deny") { gateMessage = `I can't perform that step: ${dec.reason}`; continue; }
         if (dec.decision === "require_approval") {
-          pendingAction = { id: `pending-${Date.now()}`, tool, params: action.payload as Record<string, unknown> };
+          pendingAction = { id: `pending-${Date.now()}`, tool, params: (action.payload ?? {}) as Record<string, unknown> };
           gateMessage = "This needs approval before I can proceed.";
           continue;
         }
@@ -123,14 +277,29 @@ export const workflowAgent: SubAgent = {
       allowedActions.push(action);
     }
 
+    // Audit hybrid-specific action types. Skip set_variable / api_call —
+    // workflow-agent self-audits those above (slot_write per accepted variable
+    // + provenance, policy_event per gated api_call).
+    await emitJourneyTransitions(ctx.audit, journey.id, oldHistory, result.state.history as JourneyHistoryEntry[]);
+    await emitAuditFromActions(ctx.audit, result.actions, {
+      journeyId: journey.id,
+      skip: ["set_variable", "api_call"],
+    });
+
     try {
-      await dialogStateRepo.upsertByConversation(ctx.conversationId, {
+      await dialogStateRepo.upsertByConversationForTenant(ctx.tenantId, ctx.conversationId, {
         journey_id: journey.id, current_node_id: result.state.currentNodeId,
         variables: result.state.variables, history: result.state.history,
         context: result.state.context, done: result.done ? 1 : 0,
       });
-    } catch {
-      // v1 limitation: dialog state persistence best-effort.
+    } catch (err) {
+      // Persistence failure is non-fatal for the turn (the response is still
+      // returned), but it must be visible in logs and the audit trail.
+      console.error("[workflowAgent] dialog state persistence failed:", err);
+      await ctx.audit.emit("policy_event", {
+        decision: "deny", target: "persistence",
+        reason: err instanceof Error ? err.message : String(err),
+      });
     }
 
     let response = gateMessage ?? (result.messages.join("\n").trim() || "Let me start the workflow.");
@@ -141,7 +310,7 @@ export const workflowAgent: SubAgent = {
 
     return {
       response, variables: finalVariables, done: result.done,
-      actions: allowedActions.map((a) => ({ type: a.type, payload: a.payload })),
+      actions: allowedActions.map((a) => ({ type: a.type, payload: (a.payload ?? {}) as Record<string, unknown> })),
       pendingAction,
     };
   },

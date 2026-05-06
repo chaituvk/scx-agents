@@ -16,7 +16,7 @@ export class MemoryService {
     const want = (l: MemoryLayer) => layers.includes(l);
 
     const ephemeralP = want("ephemeral")
-      ? Promise.resolve(this.ephemeral.get(query.conversationId))
+      ? this.ephemeral.get(query.tenantId, query.conversationId)
       : Promise.resolve({} as Record<string, unknown>);
 
     const profileP = want("profile")
@@ -41,7 +41,7 @@ export class MemoryService {
           ? history[history.length - 1].content
           : "";
       if (topicQuery) {
-        knowledge = await loadKnowledge(topicQuery);
+        knowledge = await loadKnowledge(topicQuery, query.tenantId);
       }
     }
 

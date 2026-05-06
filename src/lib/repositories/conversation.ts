@@ -33,6 +33,11 @@ class ConversationRepo extends Repository<Conversation> {
     return row;
   }
 
+  async findByIdForTenant(id: string, tenantId: string): Promise<Conversation | null> {
+    const row = await getOne("SELECT * FROM conversations WHERE id = $1 AND tenant_id = $2", [id, tenantId]);
+    return row as Conversation | null;
+  }
+
   async findAll(limit: number = 100, tenantId?: string): Promise<Conversation[]> {
     const cacheKey = tenantId ? this.listCacheKey(`tenant:${tenantId}:limit:${limit}`) : this.listCacheKey(`limit:${limit}`);
     const cached = await this.cache.get<Conversation[]>(cacheKey);

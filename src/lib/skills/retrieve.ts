@@ -11,9 +11,9 @@ import type {
 
 export const retrieveSkill: Skill<RetrieveInput, RetrieveOutput> = {
   name: "retrieve",
-  async run(input: RetrieveInput, _ctx: SkillContext): Promise<RetrieveOutput> {
+  async run(input: RetrieveInput, ctx: SkillContext): Promise<RetrieveOutput> {
     const topK = input.topK ?? 3;
-    const docs = await retrieveKnowledge(input.query, topK);
+    const docs = await retrieveKnowledge(input.query, topK, ctx.tenantId);
     const passages: RetrievePassage[] = docs.map((d) => ({
       source: d.source,
       title: d.title,
