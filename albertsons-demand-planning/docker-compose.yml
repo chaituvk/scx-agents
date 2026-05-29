@@ -1,0 +1,25 @@
+# Development compose. The science package runs as one-shot jobs;
+# the api and web are long-running services that read shared volumes.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      ADP_DATA_DIR: /data
+      ADP_CORS_ORIGIN: http://localhost:3000
+    volumes:
+      - ./infra/data:/data:ro
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./apps/web
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api

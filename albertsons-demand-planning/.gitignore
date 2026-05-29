@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+
+# Data artifacts
+infra/data/raw/
+infra/data/models/
+infra/data/forecasts/
+infra/data/recommendations/
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store

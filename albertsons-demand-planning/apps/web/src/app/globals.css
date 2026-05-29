@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0b0d10;
+  --panel: #14181d;
+  --border: #232a32;
+  --ink: #e8eaed;
+  --muted: #98a2b3;
+  --accent: #ff7a00;        /* Albertsons orange-ish */
+  --positive: #2bb673;
+  --negative: #e26161;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial;
+}
