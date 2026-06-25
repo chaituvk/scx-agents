@@ -16,15 +16,18 @@ import { supervisorAgent } from "../agents/supervisor";
 import { makeAuditEmitter } from "../audit";
 import { journeyRepo, dialogStateRepo } from "../repositories";
 import { loadTenantRuntime } from "../runtime/tenant-runtime";
+import { formatResponse, type Channel } from "../formatters/channel";
 import type {
   OrchestratorTurnInput,
   OrchestratorTurnOutput,
   PendingApproval,
   SkillContext,
+  SubAgentRunOutput,
   SupervisorCheckOutput,
   TopicFrame,
   TriageOutput,
   SubAgentName,
+  MemoryContext,
 } from "../agents/types";
 
 const KNOWN_INTENTS = [
@@ -215,13 +218,39 @@ export class Orchestrator {
       sessionAware: !input.forceSubAgent && !input.requestedJourneyId,
     });
 
-    // 3. Dispatch to sub-agent.
-    const sub = selectSubAgent(triage);
+    // 3. Dispatch to sub-agent (or run collaboration mode when requested).
     const variables = input.variables ?? {};
-    const subOut = await sub.run(
-      { message: input.message, triage, context: memCtx, variables },
-      ctx
-    );
+    let subOut: SubAgentRunOutput;
+    let subName: SubAgentName;
+    if (input.collaboratingAgents && input.collaboratingAgents.length > 0) {
+      const collabResult = await this.collaborate(
+        input.collaboratingAgents,
+        input,
+        ctx,
+        memCtx,
+        variables,
+      );
+      subOut = {
+        response: collabResult.response,
+        variables: collabResult.variables,
+        toolCalls: collabResult.toolCalls,
+        done: false,
+        actions: [],
+      };
+      subName = input.collaboratingAgents[0];
+    } else {
+      const sub = selectSubAgent(triage);
+      subName = sub.name;
+      subOut = await sub.run(
+        { message: input.message, triage, context: memCtx, variables },
+        ctx
+      );
+    }
+
+    // Merge agent-written variables back into shared memory context so the
+    // updated slots are immediately visible to the supervisor check and any
+    // future collaborating agents within the same turn.
+    Object.assign(memCtx.ephemeral, subOut.variables);
 
     // 4. Supervisor check.
     const supervisor = await supervisorAgent.check(
@@ -239,17 +268,26 @@ export class Orchestrator {
       finalResponse = supervisor.rewrittenContent;
     }
 
-    // 5. Topic-stack reconciliation + session state persistence. Only
+    // 5. Channel formatting — apply before returning when a non-web channel is
+    //    specified. This must happen after supervisor rewriting so we format
+    //    the final content, not the pre-rewrite draft.
+    let formattedChannel: string | undefined;
+    if (input.channel && input.channel !== 'web') {
+      finalResponse = formatResponse(finalResponse, { channel: input.channel as Channel });
+      formattedChannel = input.channel;
+    }
+
+    // 6. Topic-stack reconciliation + session state persistence. Only
     //    triage-driven turns update last_intent / topic_stack — hint-driven
     //    turns leave them alone (caller is responsible).
     if (!input.forceSubAgent && !input.requestedJourneyId) {
-      const newStack = reconcileTopicStack(session, triage, sub.name);
+      const newStack = reconcileTopicStack(session, triage, subName);
       // If the workflow finished on this turn, clear any outstanding stack.
-      const finalStack = sub.name === "workflow" && subOut.done ? [] : newStack;
+      const finalStack = subName === "workflow" && subOut.done ? [] : newStack;
       try {
         await dialogStateRepo.upsertByConversationForTenant(input.tenantId, input.conversationId, {
           last_intent: triage.intent,
-          active_agent: sub.name,
+          active_agent: subName,
           topic_stack: finalStack,
         });
       } catch (err) {
@@ -263,14 +301,14 @@ export class Orchestrator {
     }
 
     await audit.emit("turn_end", {
-      subAgent: sub.name,
+      subAgent: subName,
       done: subOut.done,
       supervisorPass: supervisor.pass,
     });
 
     return {
       response: finalResponse,
-      subAgent: sub.name,
+      subAgent: subName,
       intent: triage.intent,
       variables: subOut.variables,
       toolCalls: subOut.toolCalls,
@@ -279,7 +317,50 @@ export class Orchestrator {
       done: subOut.done,
       actions: subOut.actions,
       pendingApproval: subOut.pendingApproval,
+      formattedChannel,
     };
+  }
+
+  async collaborate(
+    agents: SubAgentName[],
+    input: OrchestratorTurnInput,
+    ctx: SkillContext,
+    memCtx: MemoryContext,
+    variables: Record<string, string>,
+  ): Promise<{ response: string; variables: Record<string, string>; toolCalls: SubAgentRunOutput['toolCalls'] }> {
+    // Run agents in parallel
+    const results = await Promise.allSettled(
+      agents.map(agentName => {
+        const fakeTriage: TriageOutput = {
+          intent: 'forced',
+          subAgent: agentName,
+          confidence: 1.0,
+          rationale: 'collaboration',
+        };
+        const sub = selectSubAgent(fakeTriage);
+        return sub.run({ message: input.message, triage: fakeTriage, context: memCtx, variables }, ctx);
+      })
+    );
+
+    // Merge successful results
+    const successful = results
+      .filter((r): r is PromiseFulfilledResult<SubAgentRunOutput> => r.status === 'fulfilled')
+      .map(r => r.value);
+
+    if (successful.length === 0) throw new Error('All collaborating agents failed');
+
+    // Priority: use the most informative response (longest with citations preferred)
+    const best = successful.reduce((a, b) => {
+      const aScore = a.response.length + (a.citations?.length ?? 0) * 50;
+      const bScore = b.response.length + (b.citations?.length ?? 0) * 50;
+      return bScore > aScore ? b : a;
+    });
+
+    // Merge all variables and tool calls
+    const mergedVars = Object.assign({}, variables, ...successful.map(r => r.variables));
+    const mergedToolCalls = successful.flatMap(r => r.toolCalls ?? []);
+
+    return { response: best.response, variables: mergedVars, toolCalls: mergedToolCalls };
   }
 }
 

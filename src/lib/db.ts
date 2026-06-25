@@ -403,6 +403,9 @@ function initPgSchema() {
       payload JSONB NOT NULL
     );
 
+    -- Migration: GDPR/CCPA compliance — add opt-out flag to users
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS ccpa_opt_out BOOLEAN DEFAULT false;
+
     -- Migration: add tenant_id to existing tables (must run before indexes)
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE integrations ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
@@ -455,6 +458,46 @@ function initPgSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_audit_events_conversation_ts ON audit_events(conversation_id, ts);
     CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS experiments (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'draft',
+      variants JSONB NOT NULL,
+      metric_goal TEXT NOT NULL,
+      started_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS experiment_assignments (
+      id TEXT PRIMARY KEY,
+      experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL,
+      variant_id TEXT NOT NULL,
+      assigned_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(experiment_id, conversation_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_experiments_tenant ON experiments(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_experiment_assignments_exp ON experiment_assignments(experiment_id);
+    CREATE INDEX IF NOT EXISTS idx_experiment_assignments_conv ON experiment_assignments(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS prompt_versions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      agent_type TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      system_prompt TEXT NOT NULL,
+      is_active BOOLEAN DEFAULT false,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(tenant_id, agent_type, version)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prompt_versions_tenant_type ON prompt_versions(tenant_id, agent_type);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -741,6 +784,26 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_journey_scenarios_tenant ON journey_scenarios(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_journey_scenarios_journey ON journey_scenarios(journey_id);
+
+    CREATE TABLE IF NOT EXISTS experiments (
+      id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+      description TEXT, status TEXT DEFAULT 'draft', variants TEXT NOT NULL,
+      metric_goal TEXT NOT NULL, started_at TEXT, ended_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS experiment_assignments (
+      id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+      variant_id TEXT NOT NULL, assigned_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(experiment_id, conversation_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS prompt_versions (
+      id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, agent_type TEXT NOT NULL,
+      version INTEGER NOT NULL, system_prompt TEXT NOT NULL,
+      is_active INTEGER DEFAULT 0, notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, agent_type, version)
+    );
   `);
 
   // Idempotent additive column migrations for existing SQLite databases.
@@ -759,6 +822,13 @@ function initSqliteSchema() {
     if (!existing.has(name)) {
       sqliteDb.exec(`ALTER TABLE dialog_states ADD COLUMN ${name} ${type}`);
     }
+  }
+
+  // GDPR/CCPA: add ccpa_opt_out to users table
+  const userCols = sqliteDb.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+  const userColSet = new Set(userCols.map((c) => c.name));
+  if (!userColSet.has("ccpa_opt_out")) {
+    sqliteDb.exec(`ALTER TABLE users ADD COLUMN ccpa_opt_out INTEGER DEFAULT 0`);
   }
 }
 

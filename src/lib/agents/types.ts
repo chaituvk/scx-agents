@@ -389,6 +389,9 @@ export interface SupervisorCheckOutput {
   pass: boolean;
   issues: Array<{ kind: "pii" | "off_topic" | "ungrounded" | "tone" | "policy"; detail: string }>;
   rewrittenContent?: string;
+  sentiment?: import("../skills/sentiment").SentimentResult;
+  escalationRisk?: number;
+  shouldEscalate?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -410,6 +413,16 @@ export interface OrchestratorTurnInput {
    */
   requestedJourneyId?: string;
   forceSubAgent?: SubAgentName;
+  /**
+   * When set, the orchestrator runs these agents in parallel (collaboration
+   * mode) instead of dispatching to a single sub-agent chosen by triage.
+   */
+  collaboratingAgents?: SubAgentName[];
+  /**
+   * Response channel — when provided (and not 'web'), the final response is
+   * passed through the channel formatter before being returned.
+   */
+  channel?: string;
 }
 
 export interface OrchestratorTurnOutput {
@@ -424,4 +437,9 @@ export interface OrchestratorTurnOutput {
   actions: Array<{ type: string; payload: Record<string, unknown> }>;
   /** Mirrored from SubAgentRunOutput when the turn ended in a held state. */
   pendingApproval?: PendingApproval;
+  /**
+   * The channel the response was formatted for, when channel formatting was
+   * applied (i.e. channel was set and was not 'web').
+   */
+  formattedChannel?: string;
 }

@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { agentRepo } from "@/lib/repositories";
 import { getTenantFromRequest } from "@/lib/tenant";
+import { requireAuth } from "@/lib/api-auth";
 
 export async function GET(req: NextRequest) {
+  const authResult = await requireAuth(req, "agents", "read");
+  if (authResult instanceof NextResponse) return authResult;
+
   const tenantId = await getTenantFromRequest(req);
   const agents = await agentRepo.findAll(tenantId);
   return NextResponse.json({ agents });
 }
 
 export async function POST(req: NextRequest) {
+  const authResult = await requireAuth(req, "agents", "write");
+  if (authResult instanceof NextResponse) return authResult;
+
   try {
     const body = await req.json();
     const tenantId = await getTenantFromRequest(req);
