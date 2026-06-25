@@ -24,6 +24,7 @@ import {
   Palette,
   Beaker,
   Building2,
+  ScrollText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -46,6 +47,7 @@ const studioTools = [
   { name: "Simulation", href: "/studio/simulation", icon: FlaskConical },
   { name: "Knowledge", href: "/studio/knowledge", icon: BookOpen },
   { name: "Brand", href: "/studio/brand", icon: Palette },
+  { name: "Playbooks", href: "/studio/playbooks", icon: ScrollText },
   { name: "Testing", href: "/studio/testing", icon: Beaker },
 ];
 

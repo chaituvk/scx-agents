@@ -15,6 +15,7 @@ import {
   CheckCircle,
   AlertTriangle,
   MessageSquare,
+  ScrollText,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -73,6 +74,15 @@ const studioModules = [
     status: "live",
     color: "text-cyan-400",
     bg: "bg-cyan-500/10",
+  },
+  {
+    name: "Playbooks",
+    href: "/studio/playbooks",
+    icon: ScrollText,
+    description: "Natural language agent configuration — persona, instructions, policies, and escalation triggers. No code, no flows.",
+    status: "live",
+    color: "text-[#c4a574]",
+    bg: "bg-[#c4a574]/10",
   },
   {
     name: "Test Suite",
