@@ -62,5 +62,7 @@ export interface PlaybookRunOutput {
   done: boolean
   escalated: boolean
   escalationReason?: string
+  /** Set when runner hits request_approval — caller should persist and pause */
+  pendingApproval?: { reason: string; action: string }
   thinkingSteps: string[]
 }

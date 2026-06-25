@@ -16,3 +16,4 @@ export { journeyScenarioRepo, toJourneyScenario, type StoredJourneyScenario } fr
 export { runtimeProfileRepo, type StoredRuntimeProfile } from "./runtime-profile";
 export { tenantRepo, type Tenant } from "./tenant";
 export { playbookRepo, type Playbook } from "./playbook";
+export { playbookStateRepo, type PlaybookState } from "./playbook-state";

@@ -51,12 +51,22 @@ export async function runPlaybook(
   const toolCalls: PlaybookToolCall[] = []
   const thinkingSteps: string[] = []
 
-  // Build system prompt
+  // Mutable variable map — starts from persisted prior-turn variables,
+  // updated in-loop by set_variable tool calls, returned at end so the
+  // caller can persist the updated state.
+  const variables: Record<string, string> = { ...context.variables }
+
+  // Build system prompt — inject known variables so the LLM doesn't ask
+  // for information it already has from a prior turn.
   const baseSystemPrompt = buildSystemPrompt(playbook, context.knowledge)
   const toolInstructions = buildToolInstructions(playbook.actions)
-  const systemPrompt = `${baseSystemPrompt}\n\n${toolInstructions}`
+  const variableContext = Object.keys(variables).length > 0
+    ? `\n\n## Already known from this conversation\n${Object.entries(variables).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`
+    : ''
+  const systemPrompt = `${baseSystemPrompt}${variableContext}\n\n${toolInstructions}`
 
-  // Build initial message history
+  // Build message history — prior turns give the LLM full context of
+  // where the conversation is without needing an explicit node pointer.
   const messages: LLMMessage[] = [
     { role: 'system', content: systemPrompt },
     ...context.history.map((h) => ({
@@ -83,7 +93,7 @@ export async function runPlaybook(
       return {
         response: `I'm transferring you to a human agent who can better assist you. Reason: ${reason}`,
         toolCalls,
-        variables: context.variables,
+        variables,
         done: true,
         escalated: true,
         escalationReason: reason,
@@ -99,25 +109,20 @@ export async function runPlaybook(
         toolCallData = JSON.parse(toolCallMatch[1])
       } catch {
         // Malformed JSON — treat as a regular response
-        return {
-          response: text,
-          toolCalls,
-          variables: context.variables,
-          done: false,
-          escalated: false,
-          thinkingSteps,
-        }
+        return { response: text, toolCalls, variables, done: false, escalated: false, thinkingSteps }
       }
 
       const { tool: toolName, input: toolInput } = toolCallData
+      const callId = `call_${Date.now()}_${iterations}`
 
-      // escalate_to_human called as a tool is treated as escalation
+      // ── Intercepted tools (no external call) ──────────────────────
+
       if (toolName === 'escalate_to_human') {
         const reason = (toolInput?.reason as string) ?? 'Agent requested escalation'
         return {
           response: `I'm transferring you to a human agent who can better assist you. Reason: ${reason}`,
           toolCalls,
-          variables: context.variables,
+          variables,
           done: true,
           escalated: true,
           escalationReason: reason,
@@ -125,8 +130,44 @@ export async function runPlaybook(
         }
       }
 
-      // Execute the tool
-      const callId = `call_${Date.now()}_${iterations}`
+      if (toolName === 'set_variable') {
+        const name = (toolInput?.name as string) ?? ''
+        const value = String(toolInput?.value ?? '')
+        if (name) variables[name] = value
+        const result = { stored: true, name, value }
+        toolCalls.push({ id: callId, name: toolName, input: toolInput, result })
+        messages.push({ role: 'assistant', content: text })
+        messages.push({ role: 'user', content: `Tool result for set_variable:\n${JSON.stringify(result)}` })
+        continue
+      }
+
+      if (toolName === 'get_variable') {
+        const name = (toolInput?.name as string) ?? ''
+        const value = name ? (variables[name] ?? null) : null
+        const result = { name, value, found: value !== null }
+        toolCalls.push({ id: callId, name: toolName, input: toolInput, result })
+        messages.push({ role: 'assistant', content: text })
+        messages.push({ role: 'user', content: `Tool result for get_variable:\n${JSON.stringify(result)}` })
+        continue
+      }
+
+      if (toolName === 'request_approval') {
+        const reason = (toolInput?.reason as string) ?? 'Approval required'
+        const action = (toolInput?.action as string) ?? 'unknown'
+        toolCalls.push({ id: callId, name: toolName, input: toolInput, result: { status: 'pending' } })
+        return {
+          response: `This action requires supervisor approval before I can proceed. Reason: ${reason}`,
+          toolCalls,
+          variables,
+          done: false,
+          escalated: false,
+          pendingApproval: { reason, action },
+          thinkingSteps,
+        }
+      }
+
+      // ── External tool call ─────────────────────────────────────────
+
       let result: unknown
       try {
         result = await executeTool(toolName, toolInput as Record<string, unknown>)
@@ -134,41 +175,24 @@ export async function runPlaybook(
         result = { error: err instanceof Error ? err.message : String(err) }
       }
 
-      const toolCall: PlaybookToolCall = {
-        id: callId,
-        name: toolName,
-        input: toolInput,
-        result,
-      }
-      toolCalls.push(toolCall)
-
-      // Append the assistant's TOOL_CALL message and the tool result
+      toolCalls.push({ id: callId, name: toolName, input: toolInput, result })
       messages.push({ role: 'assistant', content: text })
       messages.push({
         role: 'user',
         content: `Tool result for ${toolName}:\n${JSON.stringify(result, null, 2)}`,
       })
-
-      // Loop again with the tool result injected
       continue
     }
 
-    // Normal text response — return it
-    return {
-      response: text,
-      toolCalls,
-      variables: context.variables,
-      done: false,
-      escalated: false,
-      thinkingSteps,
-    }
+    // Normal text response — conversation continues next turn
+    return { response: text, toolCalls, variables, done: false, escalated: false, thinkingSteps }
   }
 
-  // Exceeded max iterations — return a safe fallback
+  // Exceeded max iterations
   return {
     response: "I'm sorry, I wasn't able to fully resolve your request. Let me transfer you to a human agent for further assistance.",
     toolCalls,
-    variables: context.variables,
+    variables,
     done: true,
     escalated: true,
     escalationReason: 'Exceeded maximum reasoning iterations',

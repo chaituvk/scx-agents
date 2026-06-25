@@ -518,6 +518,17 @@ function initPgSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_playbooks_tenant ON playbooks(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_playbooks_status ON playbooks(status);
+
+    CREATE TABLE IF NOT EXISTS playbook_states (
+      conversation_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL,
+      variables JSONB DEFAULT '{}',
+      turn_count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (conversation_id, tenant_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbook_states_tenant ON playbook_states(tenant_id);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -841,6 +852,16 @@ function initSqliteSchema() {
       model_tier TEXT DEFAULT 'reasoning',
       created_at TEXT,
       updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS playbook_states (
+      conversation_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL,
+      variables TEXT DEFAULT '{}',
+      turn_count INTEGER DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (conversation_id, tenant_id)
     );
   `);
 

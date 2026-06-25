@@ -146,6 +146,35 @@ const toolDefinitions: ToolDefinition[] = [
     requiresAuth: false,
     timeout: 3000,
   },
+  {
+    name: "set_variable",
+    description: "Store a named value for use later in this conversation (e.g. order_id, customer_email). Use this to remember information the customer provides.",
+    parameters: {
+      name: { type: "string", description: "Variable name (snake_case)", required: true },
+      value: { type: "string", description: "Value to store", required: true },
+    },
+    requiresAuth: false,
+    timeout: 100,
+  },
+  {
+    name: "get_variable",
+    description: "Retrieve a previously stored variable from this conversation.",
+    parameters: {
+      name: { type: "string", description: "Variable name to retrieve", required: true },
+    },
+    requiresAuth: false,
+    timeout: 100,
+  },
+  {
+    name: "request_approval",
+    description: "Pause the conversation and request supervisor approval before proceeding with a sensitive action.",
+    parameters: {
+      reason: { type: "string", description: "Why approval is needed", required: true },
+      action: { type: "string", description: "The action awaiting approval", required: true },
+    },
+    requiresAuth: false,
+    timeout: 1000,
+  },
 ];
 
 /** Return all registered tool definitions (useful for LLM function calling). */
@@ -245,6 +274,17 @@ const mocks: Record<string, (params: Record<string, any>) => Promise<any>> = {
     ticket_id: "TKT-" + Math.floor(10000 + Math.random() * 90000),
     estimated_wait: "2 minutes",
     department: params.department || "Support",
+  }),
+
+  // set_variable and get_variable are intercepted by runner.ts before
+  // reaching executeTool — these mocks are fallback only.
+  set_variable: async (params) => ({ stored: true, name: params.name, value: params.value }),
+  get_variable: async (params) => ({ name: params.name, value: null, found: false }),
+
+  request_approval: async (params) => ({
+    status: "pending",
+    reason: params.reason,
+    action: params.action,
   }),
 };
 
