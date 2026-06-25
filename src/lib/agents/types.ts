@@ -71,6 +71,7 @@ export interface TriageInput {
 export interface TriageOutput {
   intent: string;
   journeyId?: string;
+  playbookId?: string;
   specialistId?: string;
   subAgent: SubAgentName;
   confidence: number;
@@ -277,7 +278,7 @@ export interface SessionState {
 // Sub-agents
 // ────────────────────────────────────────────────────────────────────────────
 
-export type SubAgentName = "rag" | "workflow" | "tool" | "escalation" | "general";
+export type SubAgentName = "rag" | "workflow" | "tool" | "escalation" | "general" | "playbook";
 
 export interface SubAgentRunInput {
   message: string;

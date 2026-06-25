@@ -498,6 +498,26 @@ function initPgSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_prompt_versions_tenant_type ON prompt_versions(tenant_id, agent_type);
+
+    CREATE TABLE IF NOT EXISTS playbooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      status TEXT DEFAULT 'draft',
+      persona TEXT DEFAULT '',
+      topics JSONB DEFAULT '[]',
+      instructions JSONB DEFAULT '[]',
+      policies JSONB DEFAULT '[]',
+      actions JSONB DEFAULT '[]',
+      escalation_triggers JSONB DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT DEFAULT 'reasoning',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbooks_tenant ON playbooks(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_playbooks_status ON playbooks(status);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -803,6 +823,24 @@ function initSqliteSchema() {
       is_active INTEGER DEFAULT 0, notes TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(tenant_id, agent_type, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS playbooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      status TEXT DEFAULT 'draft',
+      persona TEXT DEFAULT '',
+      topics TEXT DEFAULT '[]',
+      instructions TEXT DEFAULT '[]',
+      policies TEXT DEFAULT '[]',
+      actions TEXT DEFAULT '[]',
+      escalation_triggers TEXT DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT DEFAULT 'reasoning',
+      created_at TEXT,
+      updated_at TEXT
     );
   `);
 

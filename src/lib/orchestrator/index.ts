@@ -74,6 +74,16 @@ async function loadSession(tenantId: string, conversationId: string): Promise<Se
   };
 }
 
+async function loadActivePlaybook(tenantId: string): Promise<string | null> {
+  try {
+    const { playbookRepo } = await import('../repositories/playbook');
+    const all = await playbookRepo.findAll(tenantId);
+    return all.find((p: { status: string; id: string }) => p.status === 'active')?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadIntentMap(tenantId: string): Promise<Record<string, string>> {
   const runtime = await loadTenantRuntime(tenantId);
   const router = runtime.profiles.find((p) => p.kind === "router" && p.status === "active");
@@ -133,8 +143,8 @@ export class Orchestrator {
 
     await audit.emit("turn_start", { message: input.message });
 
-    // 1. Load memory + session state + tenant intent map in parallel.
-    const [memCtx, session, intentMap] = await Promise.all([
+    // 1. Load memory + session state + tenant intent map + active playbook in parallel.
+    const [memCtx, session, intentMap, activePlaybookId] = await Promise.all([
       memoryService.load({
         tenantId: input.tenantId,
         conversationId: input.conversationId,
@@ -142,6 +152,7 @@ export class Orchestrator {
       }),
       loadSession(input.tenantId, input.conversationId),
       loadIntentMap(input.tenantId),
+      loadActivePlaybook(input.tenantId),
     ]);
 
     // 1b. Pending-approval gate (Stage 7). When a prior turn paused on a
@@ -209,10 +220,18 @@ export class Orchestrator {
       );
     }
 
+    // If an active playbook is configured for this tenant, prefer it over
+    // the triage-selected sub-agent (unless triage selected escalation or a
+    // forced/hint-driven route is in effect).
+    if (activePlaybookId && !input.forceSubAgent && !input.requestedJourneyId && triage.subAgent !== 'escalation') {
+      triage = { ...triage, subAgent: 'playbook', playbookId: activePlaybookId };
+    }
+
     await audit.emit("route_decision", {
       intent: triage.intent,
       subAgent: triage.subAgent,
       journeyId: triage.journeyId,
+      playbookId: triage.playbookId,
       confidence: triage.confidence,
       rationale: triage.rationale,
       sessionAware: !input.forceSubAgent && !input.requestedJourneyId,

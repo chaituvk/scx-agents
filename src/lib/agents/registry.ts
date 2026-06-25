@@ -5,6 +5,7 @@ import { workflowAgent } from "./workflow-agent";
 import { toolAgent } from "./tool-agent";
 import { escalationAgent } from "./escalation-agent";
 import { generalAgent } from "./general-agent";
+import { playbookAgent } from "./playbook-agent";
 import type { SubAgent, SubAgentName, TriageOutput } from "./types";
 
 export const subAgents: Record<SubAgentName, SubAgent> = {
@@ -13,6 +14,7 @@ export const subAgents: Record<SubAgentName, SubAgent> = {
   tool: toolAgent,
   escalation: escalationAgent,
   general: generalAgent,
+  playbook: playbookAgent,
 };
 
 export function getSubAgent(name: SubAgentName): SubAgent {
@@ -28,4 +30,4 @@ export function selectSubAgent(triage: TriageOutput): SubAgent {
   throw new Error(`No SubAgent can handle triage subAgent='${triage.subAgent}'`);
 }
 
-export { ragAgent, workflowAgent, toolAgent, escalationAgent, generalAgent };
+export { ragAgent, workflowAgent, toolAgent, escalationAgent, generalAgent, playbookAgent };
