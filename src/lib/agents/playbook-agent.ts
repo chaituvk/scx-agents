@@ -112,8 +112,16 @@ export const playbookAgent: SubAgent = {
 
     const output = await runPlaybook(playbook, runContext)
 
-    // Persist updated variables (including anything set_variable captured this turn)
-    await persistState(ctx.conversationId, ctx.tenantId, playbook.id, output.variables, turnCount + 1)
+    // Persist or clean up state depending on conversation outcome.
+    // When done, delete the row so the next conversation starts fresh.
+    if (output.done && !output.pendingApproval) {
+      try {
+        const { playbookStateRepo } = await import('../repositories/playbook-state')
+        await playbookStateRepo.delete(ctx.conversationId, ctx.tenantId)
+      } catch { /* non-fatal */ }
+    } else {
+      await persistState(ctx.conversationId, ctx.tenantId, playbook.id, output.variables, turnCount + 1)
+    }
 
     // Audit tool calls
     for (const tc of output.toolCalls) {

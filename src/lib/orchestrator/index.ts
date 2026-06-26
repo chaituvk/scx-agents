@@ -14,7 +14,7 @@ import { triageSkill } from "../skills";
 import { selectSubAgent } from "../agents/registry";
 import { supervisorAgent } from "../agents/supervisor";
 import { makeAuditEmitter } from "../audit";
-import { journeyRepo, dialogStateRepo } from "../repositories";
+import { journeyRepo, dialogStateRepo, messageRepo } from "../repositories";
 import { loadTenantRuntime } from "../runtime/tenant-runtime";
 import { formatResponse, type Channel } from "../formatters/channel";
 import type {
@@ -316,6 +316,49 @@ export class Orchestrator {
           decision: "deny", target: "session_persistence",
           reason: err instanceof Error ? err.message : String(err),
         });
+      }
+    }
+
+    // 7. Persist user message + assistant response to the messages table so
+    //    loadHistory() returns them on the next turn. Fire-and-forget — a
+    //    write failure must not fail the turn.
+    Promise.all([
+      messageRepo.create({
+        conversation_id: input.conversationId,
+        tenant_id: input.tenantId,
+        role: "user",
+        content: input.message,
+      }),
+      messageRepo.create({
+        conversation_id: input.conversationId,
+        tenant_id: input.tenantId,
+        role: "assistant",
+        content: finalResponse,
+        intent: triage.intent ?? undefined,
+        agent_id: subName,
+      }),
+    ]).catch((err) => console.error("[orchestrator] message persistence failed:", err));
+
+    // 8. Playbook pendingAction → persist as pending_approval so the approval
+    //    gate blocks the next turn and /api/orchestrator/approve can resume.
+    if (subOut.pendingAction && subName === "playbook") {
+      const pendingApproval: PendingApproval = {
+        id: subOut.pendingAction.id,
+        journeyId: "",
+        nodeId: "",
+        playbookId: (subOut.pendingAction.params as Record<string, unknown>)?.playbookId as string | undefined,
+        subAgent: "playbook",
+        reason: subOut.pendingAction.tool,
+        triggeringMessage: input.message,
+        createdAt: new Date().toISOString(),
+      };
+      try {
+        await dialogStateRepo.upsertByConversationForTenant(input.tenantId, input.conversationId, {
+          pending_approval: pendingApproval as unknown as Record<string, unknown>,
+          active_agent: "playbook",
+        });
+      } catch (err) {
+        console.error("[orchestrator] playbook approval persistence failed:", err);
       }
     }
 

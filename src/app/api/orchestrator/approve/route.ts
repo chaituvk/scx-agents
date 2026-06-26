@@ -89,16 +89,16 @@ export async function POST(req: NextRequest) {
     }
 
     // Approve path: drive a synthetic resume turn through the orchestrator.
-    // forceSubAgent="workflow" + requestedJourneyId bypasses the pending-
-    // approval gate (we cleared it above anyway) and re-enters workflow-
-    // agent at the parked node, where handleInput will advance past the
-    // resolved policy_check via its outgoing edge.
+    // Route to the sub-agent that originally paused (workflow or playbook).
+    // forceSubAgent bypasses the pending-approval gate (cleared above) and
+    // re-enters the correct engine at the paused position.
+    const isPlaybook = pending.subAgent === "playbook";
     const resumed = await orchestrator.runTurn({
       conversationId,
       tenantId,
       message: "[approval granted]",
-      forceSubAgent: "workflow",
-      requestedJourneyId: pending.journeyId,
+      forceSubAgent: isPlaybook ? "playbook" : "workflow",
+      ...(!isPlaybook && pending.journeyId ? { requestedJourneyId: pending.journeyId } : {}),
       variables,
     });
 

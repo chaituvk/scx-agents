@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { orchestrator } from "@/lib/orchestrator";
 import { getTenantFromRequest } from "@/lib/tenant";
 import { conversationRepo } from "@/lib/repositories";
+import { registerHttpAdapters } from "@/lib/tools/http-adapter";
+
+// Register real HTTP tool adapters once at cold-start (idempotent).
+registerHttpAdapters();
 
 export async function POST(req: NextRequest) {
   try {

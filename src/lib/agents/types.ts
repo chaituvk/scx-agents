@@ -358,6 +358,10 @@ export interface PendingApproval {
   journeyId: string;
   /** Node where execution paused — the policy_check node itself. */
   nodeId: string;
+  /** Set for playbook approvals — identifies which playbook was running. */
+  playbookId?: string;
+  /** Which sub-agent owns this approval ("workflow" | "playbook"). */
+  subAgent?: string;
   /** Runtime profile the policy_check ran against, when available. */
   profile?: string;
   /** Policy id from the runtime decision, if the rule named one. */
