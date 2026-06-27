@@ -120,10 +120,33 @@ export interface LLMResponse {
   usage?: { promptTokens: number; completionTokens: number };
 }
 
-async function callOpenRouter(messages: LLMMessage[]): Promise<LLMResponse | null> {
+// Model tier: fast (cheap), balanced (default), reasoning (complex tasks)
+export type ModelTier = "fast" | "balanced" | "reasoning";
+
+// Per-provider model selection per tier
+const TIER_MODELS = {
+  anthropic: {
+    fast: "claude-haiku-4-5-20251001",
+    balanced: "claude-sonnet-4-6",
+    reasoning: "claude-opus-4-8",
+  },
+  openai: {
+    fast: "gpt-4o-mini",
+    balanced: "gpt-4o",
+    reasoning: "gpt-4o",
+  },
+  openrouter: {
+    fast: process.env.OPENROUTER_FAST_MODEL || "anthropic/claude-haiku-4-5",
+    balanced: process.env.OPENROUTER_MODEL || "nvidia/nemotron-3-nano-omni-30b-a3b",
+    reasoning: process.env.OPENROUTER_REASONING_MODEL || "anthropic/claude-opus-4-8",
+  },
+} as const;
+
+async function callOpenRouter(messages: LLMMessage[], tier: ModelTier = "balanced"): Promise<LLMResponse | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
 
+  const model = TIER_MODELS.openrouter[tier];
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -133,10 +156,10 @@ async function callOpenRouter(messages: LLMMessage[]): Promise<LLMResponse | nul
       "X-Title": "Sierra AI",
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || "nvidia/nemotron-3-nano-omni-30b-a3b",
+      model,
       messages,
       temperature: 0.2,
-      max_tokens: 4000,
+      max_tokens: tier === "fast" ? 1500 : 4000,
     }),
   });
 
@@ -151,10 +174,11 @@ async function callOpenRouter(messages: LLMMessage[]): Promise<LLMResponse | nul
   };
 }
 
-async function callOpenAI(messages: LLMMessage[]): Promise<LLMResponse | null> {
+async function callOpenAI(messages: LLMMessage[], tier: ModelTier = "balanced"): Promise<LLMResponse | null> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
 
+  const model = TIER_MODELS.openai[tier];
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -162,10 +186,10 @@ async function callOpenAI(messages: LLMMessage[]): Promise<LLMResponse | null> {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      model,
       messages,
       temperature: 0.2,
-      max_tokens: 4000,
+      max_tokens: tier === "fast" ? 1500 : 4000,
     }),
   });
 
@@ -180,13 +204,14 @@ async function callOpenAI(messages: LLMMessage[]): Promise<LLMResponse | null> {
   };
 }
 
-async function callAnthropic(messages: LLMMessage[]): Promise<LLMResponse | null> {
+async function callAnthropic(messages: LLMMessage[], tier: ModelTier = "balanced"): Promise<LLMResponse | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
   const systemMsg = messages.find((m) => m.role === "system")?.content || "";
   const userMsgs = messages.filter((m) => m.role !== "system");
 
+  const model = process.env.ANTHROPIC_MODEL || TIER_MODELS.anthropic[tier];
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -195,8 +220,8 @@ async function callAnthropic(messages: LLMMessage[]): Promise<LLMResponse | null
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
-      max_tokens: 4000,
+      model,
+      max_tokens: tier === "fast" ? 1500 : 4000,
       system: systemMsg,
       messages: userMsgs.map((m) => ({ role: m.role, content: m.content })),
     }),
@@ -240,14 +265,35 @@ async function callOllama(messages: LLMMessage[]): Promise<LLMResponse | null> {
   }
 }
 
-export async function chat(messages: LLMMessage[]): Promise<LLMResponse> {
+// Infer appropriate tier from system prompt content when caller doesn't specify
+function inferTier(messages: LLMMessage[]): ModelTier {
+  const sys = messages.find((m) => m.role === "system")?.content || "";
+  if (sys.includes("triage classifier") || sys.includes("Classify customer message sentiment")) {
+    return "fast";
+  }
+  if (sys.includes("response supervisor") || sys.includes("You rewrite an agent reply")) {
+    return "fast";
+  }
+  if (sys.includes("escalation") || sys.includes("legal") || sys.includes("compliance")) {
+    return "reasoning";
+  }
+  return "balanced";
+}
+
+export async function chat(messages: LLMMessage[], tier?: ModelTier): Promise<LLMResponse> {
   if (process.env.USE_MOCK_LLM === "true") return callMock(messages);
 
+  const resolvedTier = tier ?? inferTier(messages);
+
   // Try OpenRouter first (user-provided), then Ollama (free local), then OpenAI, then Anthropic, then mock
-  const providers = [callOpenRouter, callOllama, callOpenAI, callAnthropic];
+  const providers: Array<(m: LLMMessage[], t: ModelTier) => Promise<LLMResponse | null>> = [
+    callOpenRouter, callOpenAI, callAnthropic,
+    // Ollama doesn't support tiers — wrap it
+    async (m) => callOllama(m),
+  ];
 
   for (const provider of providers) {
-    const result = await provider(messages);
+    const result = await provider(messages, resolvedTier);
     if (result) return result;
   }
 

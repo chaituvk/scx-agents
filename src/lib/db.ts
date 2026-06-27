@@ -619,6 +619,29 @@ function initPgSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_knowledge_docs_tenant ON knowledge_documents(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_knowledge_docs_source ON knowledge_documents(source_id);
+
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      model TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      agent_type TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_tenant ON token_usage(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_conv ON token_usage(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
+
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo_url TEXT;
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS support_email TEXT;
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'UTC';
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'en';
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_tokens_per_turn INTEGER DEFAULT 2000;
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS inactivity_timeout_mins INTEGER DEFAULT 30;
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -1028,6 +1051,22 @@ function initSqliteSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_knowledge_docs_tenant ON knowledge_documents(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_knowledge_docs_source ON knowledge_documents(source_id);
+
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      model TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      agent_type TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_tenant ON token_usage(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_conv ON token_usage(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
   `);
 
   // Idempotent additive column migrations for existing SQLite databases.
@@ -1053,6 +1092,23 @@ function initSqliteSchema() {
   const userColSet = new Set(userCols.map((c) => c.name));
   if (!userColSet.has("ccpa_opt_out")) {
     sqliteDb.exec(`ALTER TABLE users ADD COLUMN ccpa_opt_out INTEGER DEFAULT 0`);
+  }
+
+  // Add new tenant settings columns
+  const tenantCols = sqliteDb.prepare("PRAGMA table_info(tenants)").all() as { name: string }[];
+  const tenantColSet = new Set(tenantCols.map((c) => c.name));
+  const tenantAdditions: Array<[string, string]> = [
+    ["logo_url", "TEXT"],
+    ["support_email", "TEXT"],
+    ["timezone", "TEXT DEFAULT 'UTC'"],
+    ["language", "TEXT DEFAULT 'en'"],
+    ["max_tokens_per_turn", "INTEGER DEFAULT 2000"],
+    ["inactivity_timeout_mins", "INTEGER DEFAULT 30"],
+  ];
+  for (const [name, type] of tenantAdditions) {
+    if (!tenantColSet.has(name)) {
+      sqliteDb.exec(`ALTER TABLE tenants ADD COLUMN ${name} ${type}`);
+    }
   }
 }
 

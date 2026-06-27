@@ -21,6 +21,10 @@ const PUBLIC_PATHS = [
   "/api/csat",
   "/api/channels/sms",
   "/api/channels/whatsapp",
+  "/api/channels/email",
+  "/api/v1/channels/sms",
+  "/api/v1/channels/whatsapp",
+  "/api/v1/channels/email",
   "/api/openapi",
   "/widget.js",
 ];
