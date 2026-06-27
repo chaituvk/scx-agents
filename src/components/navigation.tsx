@@ -59,6 +59,7 @@ const studioTools = [
   { name: "Brand", href: "/studio/brand", icon: Palette },
   { name: "Playbooks", href: "/studio/playbooks", icon: ScrollText },
   { name: "Testing", href: "/studio/testing", icon: Beaker },
+  { name: "Experiments", href: "/studio/experiments", icon: FlaskConical },
   { name: "Webhooks", href: "/studio/webhooks", icon: Webhook },
   { name: "Profiles", href: "/studio/profiles", icon: Settings },
 ];

@@ -12,6 +12,8 @@ import {
   Zap,
   AlertTriangle,
   ChevronRight,
+  History,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -96,6 +98,9 @@ export default function PlaybooksPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [newAction, setNewAction] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [showVersions, setShowVersions] = useState(false);
+  const [versions, setVersions] = useState<{id: string; version: number; change_summary?: string; created_at: string}[]>([]);
+  const [loadingVersions, setLoadingVersions] = useState(false);
 
   // ── Fetch on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -219,6 +224,36 @@ export default function PlaybooksPage() {
       console.error(e);
     } finally {
       setDeleting(false);
+    }
+  }
+
+  // ── Version history ──────────────────────────────────────────────────────────
+  async function openVersionHistory() {
+    if (!selected || selected.id.startsWith("__new__")) return;
+    setShowVersions(true);
+    if (versions.length > 0) return; // already loaded
+    setLoadingVersions(true);
+    try {
+      const res = await fetch(`/api/playbooks/${selected.id}/versions`);
+      const data = await res.json();
+      setVersions(data.versions ?? []);
+    } finally {
+      setLoadingVersions(false);
+    }
+  }
+
+  async function snapshotVersion() {
+    if (!selected || selected.id.startsWith("__new__")) return;
+    const summary = window.prompt("Change summary (optional):");
+    if (summary === null) return; // cancelled
+    const res = await fetch(`/api/playbooks/${selected.id}/versions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ change_summary: summary || undefined }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setVersions((prev) => [data.version, ...prev]);
     }
   }
 
@@ -828,6 +863,18 @@ export default function PlaybooksPage() {
                       {!draft.id.startsWith("__new__") && (
                         <Button
                           variant="outline"
+                          size="sm"
+                          onClick={openVersionHistory}
+                          className="border-white/10 text-muted-foreground hover:text-foreground"
+                        >
+                          <History className="h-3.5 w-3.5 mr-1.5" />
+                          History
+                        </Button>
+                      )}
+
+                      {!draft.id.startsWith("__new__") && (
+                        <Button
+                          variant="outline"
                           onClick={handleDelete}
                           disabled={deleting}
                           className={
@@ -856,6 +903,58 @@ export default function PlaybooksPage() {
           </div>
         )}
       </div>
+
+      {/* Version history side panel */}
+      {showVersions && selected && (
+        <div className="fixed inset-0 z-40 flex">
+          <div className="flex-1" onClick={() => setShowVersions(false)} />
+          <div className="w-80 bg-[#0a0a0a] border-l border-white/10 h-full overflow-y-auto shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 shrink-0">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <History className="w-4 h-4 text-[#c4a574]" /> Version History
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={snapshotVersion}
+                  className="text-xs text-[#c4a574] hover:underline flex items-center gap-1"
+                >
+                  <Save className="w-3 h-3" /> Snapshot
+                </button>
+                <button onClick={() => setShowVersions(false)} className="text-muted-foreground hover:text-foreground">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 p-4 space-y-3">
+              {loadingVersions ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : versions.length === 0 ? (
+                <div className="text-center py-10 text-muted-foreground">
+                  <History className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-xs">No snapshots yet.</p>
+                  <p className="text-xs mt-1">Click "Snapshot" to save a version.</p>
+                </div>
+              ) : (
+                versions.map((v) => (
+                  <div key={v.id} className="p-3 bg-[#141414] rounded-lg border border-white/5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-[#c4a574]">v{v.version}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {new Date(v.created_at).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                    {v.change_summary && (
+                      <p className="text-xs text-muted-foreground">{v.change_summary}</p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
