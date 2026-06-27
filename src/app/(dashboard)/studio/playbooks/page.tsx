@@ -226,6 +226,9 @@ export default function PlaybooksPage() {
   const [testInput, setTestInput] = useState("");
   const [testing, setTesting] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
+  const [showVars, setShowVars] = useState(false);
+  // Accumulated variables across test turns — mirrors what production persists to DB
+  const [testVariables, setTestVariables] = useState<Record<string, string>>({});
   const [versions, setVersions] = useState<PlaybookVersion[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
   const [promptPreview, setPromptPreview] = useState(false);
@@ -252,6 +255,7 @@ export default function PlaybooksPage() {
     setSelected(pb);
     setForm({ ...pb, guardrails: pb.guardrails ?? { ...DEFAULT_GUARDRAILS } });
     setTestMessages([]);
+    setTestVariables({});
     setVersions([]);
     setEditorTab("identity");
   }
@@ -357,10 +361,16 @@ export default function PlaybooksPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: history.map(m => ({ role: m.role, content: m.content })),
+          // Pass accumulated variables so the LLM has cross-turn memory
+          variables: testVariables,
         }),
       });
       if (res.ok) {
         const data = await res.json();
+        // Merge returned variables into accumulated state for the next turn
+        if (data.variables && Object.keys(data.variables).length > 0) {
+          setTestVariables(prev => ({ ...prev, ...data.variables }));
+        }
         setTestMessages(prev => [...prev, {
           role: "assistant",
           content: data.response ?? "(no response)",
@@ -1038,13 +1048,45 @@ export default function PlaybooksPage() {
                     {showThinking ? <EyeOff className="w-2.5 h-2.5" /> : <Eye className="w-2.5 h-2.5" />}
                     {showThinking ? "Hide" : "Thinking"}
                   </button>
+                  {Object.keys(testVariables).length > 0 && (
+                    <button onClick={() => setShowVars(!showVars)} className="text-[10px] text-purple-400 hover:text-purple-300 flex items-center gap-1 transition-colors">
+                      <Brain className="w-2.5 h-2.5" /> {Object.keys(testVariables).length}
+                    </button>
+                  )}
                   {testMessages.length > 0 && (
-                    <button onClick={() => setTestMessages([])} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                    <button onClick={() => { setTestMessages([]); setTestVariables({}); }} className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
                       <RotateCcw className="w-2.5 h-2.5" /> Reset
                     </button>
                   )}
                 </div>
               </div>
+
+              {/* Variable memory panel — shows what's been stored across turns */}
+              <AnimatePresence>
+                {showVars && Object.keys(testVariables).length > 0 && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden border-b border-border shrink-0"
+                  >
+                    <div className="p-3 bg-purple-500/5">
+                      <p className="text-[10px] font-medium text-purple-400 mb-2 flex items-center gap-1.5">
+                        <Brain className="w-3 h-3" /> Session Memory ({Object.keys(testVariables).length} variables)
+                      </p>
+                      <div className="space-y-1">
+                        {Object.entries(testVariables).map(([k, v]) => (
+                          <div key={k} className="flex items-center gap-2 text-[10px] font-mono">
+                            <span className="text-purple-400/80 shrink-0">{k}</span>
+                            <span className="text-muted-foreground">→</span>
+                            <span className="text-foreground truncate">{String(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               <div className="flex-1 overflow-y-auto p-3 space-y-3">
                 {testMessages.length === 0 && (
