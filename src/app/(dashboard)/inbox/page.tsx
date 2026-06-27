@@ -7,7 +7,7 @@ import {
   CheckCircle, AlertCircle, X, Send, Loader2, Star, UserPlus,
   Sparkles, Zap, ChevronDown, Download, FileText, StickyNote, Flame,
   Square, CheckSquare, Users, Brain, History, UserCircle, ChevronLeft,
-  BookMarked,
+  BookMarked, Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,6 +98,9 @@ export default function InboxPage() {
   const [cannedOpen, setCannedOpen] = useState(false);
   const [cannedFilter, setCannedFilter] = useState("");
   const [slaAtRisk, setSlaAtRisk] = useState<Map<string, number>>(new Map());
+  const [tracesOpen, setTracesOpen] = useState(false);
+  const [traces, setTraces] = useState<{turnId: string; subAgent: string | null; intent: string | null; durationMs: number | null; events: {type: string; payload: Record<string, unknown>}[]}[]>([]);
+  const [tracesLoading, setTracesLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -151,6 +154,18 @@ export default function InboxPage() {
     searchTimeout.current = setTimeout(() => fetchConversations(val), 300);
   }
 
+  async function loadTraces(convId: string) {
+    setTracesLoading(true);
+    try {
+      const res = await fetch(`/api/observability/traces?conversationId=${convId}&limit=20`);
+      if (res.ok) {
+        const data = await res.json();
+        setTraces(data.traces ?? []);
+      }
+    } catch { /* non-fatal */ }
+    finally { setTracesLoading(false); }
+  }
+
   async function selectConversation(conv: Conversation) {
     setSelected(conv);
     setMsgLoading(true);
@@ -168,6 +183,8 @@ export default function InboxPage() {
     setSummary(null);
     setConvTags([]);
     setTagInput("");
+    setTraces([]);
+    setTracesOpen(false);
 
     // Load messages
     setCopilotSuggestions([]);
@@ -1171,6 +1188,69 @@ export default function InboxPage() {
                   Add
                 </button>
               </div>
+            </div>
+
+            {/* AI Reasoning Traces */}
+            <div>
+              <button
+                onClick={() => {
+                  const next = !tracesOpen;
+                  setTracesOpen(next);
+                  if (next && traces.length === 0 && selected) loadTraces(selected.id);
+                }}
+                className="flex items-center justify-between w-full text-[10px] text-muted-foreground uppercase tracking-wider mb-2 hover:text-foreground transition-colors"
+              >
+                <span className="flex items-center gap-1"><Activity className="w-3 h-3 text-primary/60" /> AI Reasoning</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${tracesOpen ? "rotate-180" : ""}`} />
+              </button>
+              {tracesOpen && (
+                tracesLoading ? (
+                  <div className="space-y-1">
+                    {[1, 2].map(i => <div key={i} className="h-10 rounded bg-white/5 animate-pulse" />)}
+                  </div>
+                ) : traces.length === 0 ? (
+                  <p className="text-xs text-muted-foreground opacity-60">No traces recorded yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {traces.slice(0, 8).map((t, i) => {
+                      const toolCalls = t.events.filter(e => e.type === "tool_call");
+                      const policyEvents = t.events.filter(e => e.type === "policy_event");
+                      return (
+                        <div key={t.turnId} className="text-[10px] p-2 rounded-lg bg-white/3 border border-white/5 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground font-medium">Turn {i + 1}</span>
+                            {t.durationMs != null && <span className="text-muted-foreground opacity-60">{t.durationMs}ms</span>}
+                          </div>
+                          {t.subAgent && (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-[#c4a574]/10 text-[#c4a574] capitalize">{t.subAgent}</span>
+                          )}
+                          {t.intent && (
+                            <span className="inline-block ml-1 px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 capitalize">{t.intent.replace(/_/g, " ")}</span>
+                          )}
+                          {toolCalls.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {toolCalls.map((tc, j) => (
+                                <span key={j} className="px-1.5 py-0.5 rounded bg-green-500/10 text-green-400 font-mono">
+                                  {String((tc.payload as {tool?: string}).tool ?? "tool")}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {policyEvents.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {policyEvents.map((pe, j) => (
+                                <span key={j} className="px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">
+                                  {String((pe.payload as {policy?: string; result?: string}).result ?? "policy")}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              )}
             </div>
           </div>
         </div>
