@@ -642,6 +642,101 @@ function initPgSchema() {
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'en';
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_tokens_per_turn INTEGER DEFAULT 2000;
     ALTER TABLE tenants ADD COLUMN IF NOT EXISTS inactivity_timeout_mins INTEGER DEFAULT 30;
+
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      channel TEXT NOT NULL DEFAULT 'sms',
+      message_template TEXT,
+      use_ai_personalization BOOLEAN DEFAULT false,
+      playbook_id TEXT REFERENCES playbooks(id) ON DELETE SET NULL,
+      scheduled_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      total_contacts INTEGER DEFAULT 0,
+      sent_count INTEGER DEFAULT 0,
+      delivered_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0,
+      reply_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaigns_tenant ON campaigns(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+
+    CREATE TABLE IF NOT EXISTS campaign_contacts (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      contact_id TEXT,
+      name TEXT,
+      phone TEXT,
+      email TEXT,
+      variables JSONB DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      sent_at TIMESTAMPTZ,
+      delivered_at TIMESTAMPTZ,
+      failed_at TIMESTAMPTZ,
+      error TEXT,
+      conversation_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_campaign ON campaign_contacts(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_status ON campaign_contacts(status);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_tenant ON campaign_contacts(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS customer_profiles (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      external_id TEXT,
+      email TEXT,
+      phone TEXT,
+      name TEXT,
+      channel TEXT,
+      language TEXT DEFAULT 'en',
+      timezone TEXT,
+      tags JSONB DEFAULT '[]',
+      custom_attributes JSONB DEFAULT '{}',
+      total_conversations INTEGER DEFAULT 0,
+      last_seen_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(tenant_id, email),
+      UNIQUE(tenant_id, phone)
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_tenant ON customer_profiles(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_email ON customer_profiles(email);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_phone ON customer_profiles(phone);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_external ON customer_profiles(external_id);
+
+    CREATE TABLE IF NOT EXISTS customer_memories (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      customer_id TEXT NOT NULL REFERENCES customer_profiles(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      memory_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      importance INTEGER DEFAULT 5 CHECK(importance BETWEEN 1 AND 10),
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_customer ON customer_memories(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_tenant ON customer_memories(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_type ON customer_memories(memory_type);
+
+    CREATE TABLE IF NOT EXISTS conversation_tags (
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (conversation_id, tag)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tenant ON conversation_tags(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tag ON conversation_tags(tag);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -1067,6 +1162,101 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_token_usage_tenant ON token_usage(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_token_usage_conv ON token_usage(conversation_id);
     CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
+
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      channel TEXT NOT NULL DEFAULT 'sms',
+      message_template TEXT,
+      use_ai_personalization INTEGER DEFAULT 0,
+      playbook_id TEXT,
+      scheduled_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      total_contacts INTEGER DEFAULT 0,
+      sent_count INTEGER DEFAULT 0,
+      delivered_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0,
+      reply_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaigns_tenant ON campaigns(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+
+    CREATE TABLE IF NOT EXISTS campaign_contacts (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      contact_id TEXT,
+      name TEXT,
+      phone TEXT,
+      email TEXT,
+      variables TEXT DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      sent_at TEXT,
+      delivered_at TEXT,
+      failed_at TEXT,
+      error TEXT,
+      conversation_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_campaign ON campaign_contacts(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_status ON campaign_contacts(status);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_tenant ON campaign_contacts(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS customer_profiles (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      external_id TEXT,
+      email TEXT,
+      phone TEXT,
+      name TEXT,
+      channel TEXT,
+      language TEXT DEFAULT 'en',
+      timezone TEXT,
+      tags TEXT DEFAULT '[]',
+      custom_attributes TEXT DEFAULT '{}',
+      total_conversations INTEGER DEFAULT 0,
+      last_seen_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, email),
+      UNIQUE(tenant_id, phone)
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_tenant ON customer_profiles(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_email ON customer_profiles(email);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_phone ON customer_profiles(phone);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_external ON customer_profiles(external_id);
+
+    CREATE TABLE IF NOT EXISTS customer_memories (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      customer_id TEXT NOT NULL REFERENCES customer_profiles(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      memory_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      importance INTEGER DEFAULT 5 CHECK(importance BETWEEN 1 AND 10),
+      expires_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_customer ON customer_memories(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_tenant ON customer_memories(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_type ON customer_memories(memory_type);
+
+    CREATE TABLE IF NOT EXISTS conversation_tags (
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (conversation_id, tag)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tenant ON conversation_tags(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tag ON conversation_tags(tag);
   `);
 
   // Idempotent additive column migrations for existing SQLite databases.

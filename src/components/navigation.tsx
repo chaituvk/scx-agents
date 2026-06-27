@@ -29,6 +29,8 @@ import {
   Inbox,
   Key,
   Settings,
+  Megaphone,
+  UserCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -59,6 +61,9 @@ const studioTools = [
 
 const accountTools = [
   { name: "Inbox", href: "/inbox", icon: Inbox },
+  { name: "Campaigns", href: "/campaigns", icon: Megaphone },
+  { name: "Customers", href: "/customers", icon: UserCircle },
+  { name: "Settings", href: "/settings", icon: Settings },
   { name: "API Keys", href: "/settings/api-keys", icon: Key },
 ];
 
