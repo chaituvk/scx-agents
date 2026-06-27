@@ -78,6 +78,8 @@ const accountTools = [
   { name: "Customers", href: "/customers", icon: UserCircle },
   { name: "Team", href: "/settings/team", icon: Users },
   { name: "SLA", href: "/settings/sla", icon: Clock },
+  { name: "Quality", href: "/settings/quality", icon: Shield },
+  { name: "Audit Log", href: "/settings/audit-log", icon: ScrollText },
   { name: "Settings", href: "/settings", icon: Settings },
   { name: "API Keys", href: "/settings/api-keys", icon: Key },
 ];

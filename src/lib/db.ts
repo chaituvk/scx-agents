@@ -840,6 +840,22 @@ function initPgSchema() {
     CREATE INDEX IF NOT EXISTS idx_canned_responses_tenant ON canned_responses(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_canned_responses_category ON canned_responses(category);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_canned_responses_shortcut ON canned_responses(tenant_id, shortcut) WHERE shortcut IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS quality_reviews (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL,
+      verdict TEXT NOT NULL CHECK (verdict IN ('approved', 'flagged', 'corrected')),
+      rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT,
+      corrected_content TEXT,
+      reviewed_by TEXT,
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (tenant_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_tenant ON quality_reviews(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_message ON quality_reviews(message_id);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -1460,6 +1476,22 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_canned_responses_tenant ON canned_responses(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_canned_responses_category ON canned_responses(category);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_canned_responses_shortcut ON canned_responses(tenant_id, shortcut);
+
+    CREATE TABLE IF NOT EXISTS quality_reviews (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL,
+      verdict TEXT NOT NULL CHECK (verdict IN ('approved', 'flagged', 'corrected')),
+      rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT,
+      corrected_content TEXT,
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE (tenant_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_tenant ON quality_reviews(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_message ON quality_reviews(message_id);
   `);
 
   // Idempotent additive column migrations for existing SQLite databases.
