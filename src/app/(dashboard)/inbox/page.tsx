@@ -7,6 +7,7 @@ import {
   CheckCircle, AlertCircle, X, Send, Loader2, Star, UserPlus,
   Sparkles, Zap, ChevronDown, Download, FileText, StickyNote, Flame,
   Square, CheckSquare, Users, Brain, History, UserCircle, ChevronLeft,
+  BookMarked,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -93,6 +94,10 @@ export default function InboxPage() {
   const [customerConvs, setCustomerConvs] = useState<Conversation[]>([]);
   const [customerMemories, setCustomerMemories] = useState<{id: string; memory_type: string; content: string; importance: number; created_at: string}[]>([]);
   const [customerLoading, setCustomerLoading] = useState(false);
+  const [cannedResponses, setCannedResponses] = useState<{id: string; title: string; content: string; shortcut: string | null; category: string | null}[]>([]);
+  const [cannedOpen, setCannedOpen] = useState(false);
+  const [cannedFilter, setCannedFilter] = useState("");
+  const [slaAtRisk, setSlaAtRisk] = useState<Map<string, number>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -122,6 +127,22 @@ export default function InboxPage() {
 
   useEffect(() => {
     fetch("/api/team").then(r => r.json()).then(d => setTeamMembers(d.team ?? [])).catch(() => {});
+    fetch("/api/canned-responses").then(r => r.json()).then(d => setCannedResponses(d.canned_responses ?? [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const loadSla = () => {
+      fetch("/api/sla").then(r => r.json()).then(d => {
+        const m = new Map<string, number>();
+        (d.open_conversations_at_risk ?? []).forEach((r: {conversation_id: string; minutes_remaining: number}) => {
+          m.set(r.conversation_id, r.minutes_remaining);
+        });
+        setSlaAtRisk(m);
+      }).catch(() => {});
+    };
+    loadSla();
+    const iv = setInterval(loadSla, 60_000);
+    return () => clearInterval(iv);
   }, []);
 
   function handleSearch(val: string) {
@@ -592,6 +613,15 @@ export default function InboxPage() {
                       {conv.status}
                     </span>
                     <span className="text-xs text-muted-foreground">{conv.channel}</span>
+                    {slaAtRisk.has(conv.id) && (
+                      <span className={`text-[10px] flex items-center gap-0.5 font-medium ${
+                        (slaAtRisk.get(conv.id) ?? 99) < 5 ? "text-red-500" :
+                        (slaAtRisk.get(conv.id) ?? 99) < 30 ? "text-orange-400" : "text-yellow-500"
+                      }`}>
+                        <Clock className="w-2.5 h-2.5" />
+                        {slaAtRisk.get(conv.id)}m
+                      </span>
+                    )}
                     <span className="text-xs text-muted-foreground ml-auto">
                       {priorityMode && conv.wait_minutes != null
                         ? `${conv.wait_minutes}m`
@@ -811,14 +841,59 @@ export default function InboxPage() {
           {/* Reply bar / Note input */}
           {activeTab === "messages" && selected.status === "open" && (
             <div className="border-t p-3 space-y-2 shrink-0">
-              <div className="flex gap-2">
+              <div className="relative flex gap-2">
+                {/* Canned response picker */}
+                {cannedOpen && (
+                  <div className="absolute bottom-full mb-1 left-0 right-14 z-30 bg-popover border border-border rounded-xl shadow-2xl overflow-hidden max-h-52 overflow-y-auto">
+                    <div className="px-3 py-1.5 border-b border-border flex items-center gap-1.5 bg-muted/30">
+                      <BookMarked className="w-3 h-3 text-primary" />
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Canned Responses</span>
+                      <button onClick={() => setCannedOpen(false)} className="ml-auto text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
+                    </div>
+                    {cannedResponses.filter(r =>
+                      !cannedFilter || r.title.toLowerCase().includes(cannedFilter.toLowerCase()) || (r.shortcut && r.shortcut.includes(cannedFilter))
+                    ).length === 0 ? (
+                      <div className="px-3 py-3 text-xs text-muted-foreground">No matches — keep typing or press Esc</div>
+                    ) : (
+                      cannedResponses.filter(r =>
+                        !cannedFilter || r.title.toLowerCase().includes(cannedFilter.toLowerCase()) || (r.shortcut && r.shortcut.includes(cannedFilter))
+                      ).map(r => (
+                        <button
+                          key={r.id}
+                          onClick={() => { setReply(r.content); setCannedOpen(false); setCannedFilter(""); }}
+                          className="w-full text-left px-3 py-2.5 hover:bg-muted/50 transition-colors border-b border-border/50 last:border-0"
+                        >
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <p className="text-sm font-medium">{r.title}</p>
+                            {r.shortcut && <span className="text-[10px] px-1 rounded bg-muted text-muted-foreground font-mono">/{r.shortcut}</span>}
+                            {r.category && <span className="text-[10px] text-muted-foreground ml-auto">{r.category}</span>}
+                          </div>
+                          <p className="text-xs text-muted-foreground truncate">{r.content.slice(0, 100)}</p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
                 <Textarea
                   className="min-h-[60px] text-sm resize-none"
-                  placeholder="Type a message…"
+                  placeholder="Type a message… or / for canned responses"
                   value={reply}
-                  onChange={(e) => setReply(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setReply(val);
+                    if (val === "/") {
+                      setCannedOpen(true);
+                      setCannedFilter("");
+                    } else if (val.startsWith("/") && !val.includes(" ")) {
+                      setCannedOpen(true);
+                      setCannedFilter(val.slice(1));
+                    } else {
+                      setCannedOpen(false);
+                    }
+                  }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); }
+                    if (e.key === "Escape") { setCannedOpen(false); return; }
+                    if (e.key === "Enter" && !e.shiftKey && !cannedOpen) { e.preventDefault(); sendReply(); }
                   }}
                 />
                 <div className="flex flex-col gap-1 self-end">
@@ -837,7 +912,7 @@ export default function InboxPage() {
                 </div>
               </div>
               {!reply && (
-                <p className="text-[10px] text-muted-foreground">Press ✨ to generate an AI draft reply</p>
+                <p className="text-[10px] text-muted-foreground">Press ✨ for AI draft · type <span className="font-mono">/</span> for canned responses</p>
               )}
             </div>
           )}
