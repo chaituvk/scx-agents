@@ -19,6 +19,9 @@ const PUBLIC_PATHS = [
   "/api/health",
   "/api/ready",
   "/api/csat",
+  "/api/channels/sms",
+  "/api/channels/whatsapp",
+  "/api/openapi",
   "/widget.js",
 ];
 

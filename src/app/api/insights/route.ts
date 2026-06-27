@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, getOne } from "@/lib/db";
 import { getTenantFromRequest } from "@/lib/tenant";
 import { insightRepo } from "@/lib/repositories/insight";
+import { csatRepo } from "@/lib/repositories/csat";
 
 export async function GET(req: NextRequest) {
   const tenantId = await getTenantFromRequest(req);
@@ -48,11 +49,19 @@ export async function GET(req: NextRequest) {
   const total = posCount + negCount;
   const csat = total > 0 ? Math.round((posCount / total) * 5 * 10) / 10 : 4.2;
 
+  // Prefer real CSAT ratings over sentiment-keyword estimate
+  const csatSummary = await csatRepo.summary(tenantId, 30).catch(() => null);
+  const realCsat = csatSummary && csatSummary.total_ratings > 0
+    ? csatSummary.average_score
+    : csat;
+
   const kpis = {
     totalConversations,
     resolutionRate,
     avgResponseTime,
-    csat,
+    csat: realCsat,
+    csatRatings: csatSummary?.total_ratings ?? 0,
+    csatDistribution: csatSummary?.distribution ?? null,
   };
 
   return NextResponse.json({ kpis, trends: trendsResult.rows, flagged: flaggedResult.rows });

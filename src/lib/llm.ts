@@ -269,3 +269,108 @@ export function isLLMAvailable(): boolean {
     process.env.OLLAMA_HOST
   );
 }
+
+// ── Streaming support ──────────────────────────────────────────────
+// chatStream returns an AsyncIterable<string> of token chunks.
+// Falls back to chunking the full response when the provider doesn't
+// support streaming (e.g. mock mode, Ollama non-stream).
+
+export async function* chatStream(messages: LLMMessage[]): AsyncIterable<string> {
+  if (process.env.USE_MOCK_LLM === "true") {
+    const r = callMock(messages);
+    // Simulate streaming by yielding word-by-word
+    for (const word of r.content.split(" ")) {
+      yield word + " ";
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    return;
+  }
+
+  // Anthropic streaming
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) {
+    const systemMsg = messages.find((m) => m.role === "system")?.content || "";
+    const userMsgs = messages.filter((m) => m.role !== "system");
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": anthropicKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
+        max_tokens: 4000,
+        stream: true,
+        system: systemMsg,
+        messages: userMsgs.map((m) => ({ role: m.role, content: m.content })),
+      }),
+    });
+
+    if (res.ok && res.body) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const json = JSON.parse(line.slice(6));
+            const delta = json?.delta?.text;
+            if (delta) yield delta;
+          } catch { /* skip malformed */ }
+        }
+      }
+      return;
+    }
+  }
+
+  // OpenAI streaming
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiKey}` },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        messages,
+        stream: true,
+        temperature: 0.2,
+        max_tokens: 4000,
+      }),
+    });
+
+    if (res.ok && res.body) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+          try {
+            const json = JSON.parse(line.slice(6));
+            const delta = json?.choices?.[0]?.delta?.content;
+            if (delta) yield delta;
+          } catch { /* skip */ }
+        }
+      }
+      return;
+    }
+  }
+
+  // Fallback: non-streaming
+  const result = await chat(messages);
+  for (const word of result.content.split(" ")) {
+    yield word + " ";
+  }
+}
