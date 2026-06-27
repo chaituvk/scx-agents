@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   MessageSquare, Search, Filter, ChevronRight, User, Bot, Clock,
   CheckCircle, AlertCircle, X, Send, Loader2, Star, UserPlus,
+  Sparkles, Zap, ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,9 +65,15 @@ export default function InboxPage() {
   const [csatComment, setCsatComment] = useState("");
   const [csatSubmitted, setCsatSubmitted] = useState(false);
   const [existingCsat, setExistingCsat] = useState<CsatRating | null>(null);
+  const [copilotSuggestions, setCopilotSuggestions] = useState<string[]>([]);
+  const [copilotIntent, setCopilotIntent] = useState<string | null>(null);
+  const [copilotSentiment, setCopilotSentiment] = useState<string | null>(null);
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copilotTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchConversations = useCallback(async (search = q) => {
     setLoading(true);
@@ -102,12 +109,20 @@ export default function InboxPage() {
     if (streamRef.current) { streamRef.current.close(); streamRef.current = null; }
 
     // Load messages
+    setCopilotSuggestions([]);
+    setCopilotIntent(null);
+    setCopilotSentiment(null);
     try {
       const res = await fetch(`/api/conversations/${conv.id}/messages`);
       const data = await res.json();
       setMessages(data.messages ?? []);
     } finally {
       setMsgLoading(false);
+    }
+
+    // Load copilot suggestions
+    if (conv.status === "open") {
+      fetchCopilot(conv.id);
     }
 
     // Load CSAT
@@ -154,6 +169,20 @@ export default function InboxPage() {
     } finally {
       setSending(false);
     }
+  }
+
+  async function fetchCopilot(convId: string) {
+    setCopilotLoading(true);
+    try {
+      const res = await fetch(`/api/conversations/${convId}/copilot`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setCopilotSuggestions(data.suggestions ?? []);
+        setCopilotIntent(data.intent ?? null);
+        setCopilotSentiment(data.sentiment ?? null);
+      }
+    } catch { /* non-fatal */ }
+    finally { setCopilotLoading(false); }
   }
 
   async function closeConversation() {
@@ -246,6 +275,7 @@ export default function InboxPage() {
 
       {/* Main — conversation detail */}
       {selected ? (
+        <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Header */}
           <div className="p-4 border-b flex items-center justify-between shrink-0">
@@ -360,6 +390,66 @@ export default function InboxPage() {
               </Button>
             </div>
           )}
+        </div>
+
+        {/* Copilot panel */}
+        <div className="w-64 border-l flex flex-col shrink-0 bg-[#0a0a0a]">
+          <div className="p-3 border-b flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-[#c4a574]">
+              <Sparkles className="h-3.5 w-3.5" />
+              AI Copilot
+            </div>
+            <button onClick={() => selected && fetchCopilot(selected.id)} className="text-muted-foreground hover:text-foreground">
+              <Zap className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-4">
+            {copilotIntent && (
+              <div>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">Detected intent</p>
+                <span className="text-xs px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 capitalize">
+                  {copilotIntent.replace(/_/g, " ")}
+                </span>
+              </div>
+            )}
+            {copilotSentiment && (
+              <div>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">Sentiment</p>
+                <span className={`text-xs px-2 py-1 rounded-full capitalize ${
+                  copilotSentiment === "positive" ? "bg-green-500/10 text-green-400" :
+                  copilotSentiment === "negative" || copilotSentiment === "frustrated" ? "bg-red-500/10 text-red-400" :
+                  "bg-gray-500/10 text-gray-400"
+                }`}>
+                  {copilotSentiment}
+                </span>
+              </div>
+            )}
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Suggestions</p>
+              {copilotLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => <div key={i} className="h-14 rounded-lg bg-white/5 animate-pulse" />)}
+                </div>
+              ) : copilotSuggestions.length > 0 ? (
+                <div className="space-y-2">
+                  {copilotSuggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setReply(s)}
+                      className="w-full text-left text-xs p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 hover:border-[#c4a574]/30 transition-colors text-muted-foreground hover:text-foreground"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {selected.status === "open" ? "Click ⚡ to generate suggestions." : "Suggestions available for open conversations."}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
         </div>
       ) : (
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
