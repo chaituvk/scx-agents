@@ -12,7 +12,8 @@ export type WebhookEventType =
   | "escalation.triggered"
   | "escalation.resolved"
   | "playbook.completed"
-  | "csat.submitted";
+  | "csat.submitted"
+  | "csat.requested";
 
 export interface WebhookEvent {
   type: WebhookEventType;
