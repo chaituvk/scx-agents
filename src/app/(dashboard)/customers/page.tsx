@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Search, User, Phone, Mail, Tag, Clock, MessageSquare, Plus, ChevronRight } from "lucide-react";
+import { Search, User, Phone, Mail, Tag, Clock, MessageSquare, Plus, ChevronRight, CheckCircle, AlertCircle } from "lucide-react";
 
 interface CustomerProfile {
   id: string;
@@ -25,6 +25,17 @@ interface CustomerMemory {
   created_at: string;
 }
 
+interface CustomerConversation {
+  id: string;
+  channel: string;
+  status: string;
+  sentiment: string;
+  topic?: string;
+  message_count: number;
+  updated_at: string;
+  created_at: string;
+}
+
 const MEMORY_TYPE_COLORS: Record<string, string> = {
   preference: "bg-blue-500/20 text-blue-300",
   complaint: "bg-red-500/20 text-red-300",
@@ -38,6 +49,8 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<CustomerProfile[]>([]);
   const [selected, setSelected] = useState<CustomerProfile | null>(null);
   const [memories, setMemories] = useState<CustomerMemory[]>([]);
+  const [conversations, setConversations] = useState<CustomerConversation[]>([]);
+  const [detailTab, setDetailTab] = useState<"memories" | "conversations">("memories");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [addMemoryOpen, setAddMemoryOpen] = useState(false);
@@ -75,8 +88,20 @@ export default function CustomersPage() {
     }
   }
 
+  async function loadConversations(c: CustomerProfile) {
+    const q = c.email || c.name || "";
+    if (!q) return;
+    const res = await fetch(`/api/conversations/search?q=${encodeURIComponent(q)}&limit=20`).catch(() => null);
+    if (res?.ok) {
+      const data = await res.json();
+      setConversations(data.conversations ?? []);
+    }
+  }
+
   async function selectCustomer(c: CustomerProfile) {
     setSelected(c);
+    setDetailTab("memories");
+    setConversations([]);
     await loadMemories(c.id);
   }
 
@@ -225,7 +250,73 @@ export default function CustomersPage() {
               </div>
             )}
 
-            {/* Memories */}
+            {/* Tab bar */}
+            <div className="flex border-b border-gray-800 mb-4">
+              <button
+                onClick={() => setDetailTab("memories")}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                  detailTab === "memories" ? "border-indigo-500 text-white" : "border-transparent text-gray-400 hover:text-white"
+                }`}
+              >
+                AI Memory
+              </button>
+              <button
+                onClick={() => {
+                  setDetailTab("conversations");
+                  if (conversations.length === 0) loadConversations(selected);
+                }}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1 ${
+                  detailTab === "conversations" ? "border-indigo-500 text-white" : "border-transparent text-gray-400 hover:text-white"
+                }`}
+              >
+                <MessageSquare className="h-3.5 w-3.5" /> Conversations
+                {selected.total_conversations > 0 && (
+                  <span className="ml-1 text-xs text-gray-500">({selected.total_conversations})</span>
+                )}
+              </button>
+            </div>
+
+            {/* Conversations tab */}
+            {detailTab === "conversations" && (
+              <div className="space-y-2">
+                {conversations.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                    <p className="text-sm">No conversations found</p>
+                  </div>
+                ) : (
+                  conversations.map(c => (
+                    <a
+                      key={c.id}
+                      href={`/inbox`}
+                      className="block bg-gray-900 border border-gray-800 hover:border-gray-700 rounded-xl p-3 transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          {c.status === "resolved" || c.status === "closed" ? (
+                            <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+                          ) : c.status === "escalated" ? (
+                            <AlertCircle className="h-3.5 w-3.5 text-red-500" />
+                          ) : (
+                            <div className="h-1.5 w-1.5 rounded-full bg-blue-400 mt-0.5" />
+                          )}
+                          <span className="text-sm capitalize">{c.status}</span>
+                        </div>
+                        <span className="text-xs text-gray-500">{c.channel}</span>
+                      </div>
+                      {c.topic && <p className="text-xs text-gray-400 mb-1 truncate">{c.topic}</p>}
+                      <div className="flex items-center gap-3 text-xs text-gray-500">
+                        <span>{c.message_count} messages</span>
+                        <span>{new Date(c.updated_at).toLocaleDateString()}</span>
+                      </div>
+                    </a>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* Memories tab */}
+            {detailTab === "memories" && (
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium text-gray-400">AI Memory</h3>
@@ -314,6 +405,7 @@ export default function CustomersPage() {
                 )}
               </div>
             </div>
+            )}
           </div>
         </div>
       ) : (

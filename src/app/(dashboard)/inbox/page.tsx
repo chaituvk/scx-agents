@@ -73,10 +73,14 @@ export default function InboxPage() {
   const [copilotSentiment, setCopilotSentiment] = useState<string | null>(null);
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(true);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<"messages" | "notes">("messages");
   const [notes, setNotes] = useState<{ id: string; content: string; agent_id: string; created_at: string }[]>([]);
   const [noteText, setNoteText] = useState("");
   const [notesSaving, setNotesSaving] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<{ id: string; name: string; email: string }[]>([]);
+  const [assignOpen, setAssignOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -104,6 +108,10 @@ export default function InboxPage() {
 
   useEffect(() => { fetchConversations(); }, [statusFilter, priorityMode]);
 
+  useEffect(() => {
+    fetch("/api/team").then(r => r.json()).then(d => setTeamMembers(d.team ?? [])).catch(() => {});
+  }, []);
+
   function handleSearch(val: string) {
     setQ(val);
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
@@ -124,6 +132,7 @@ export default function InboxPage() {
     setActiveTab("messages");
     setNotes([]);
     setNoteText("");
+    setSummary(null);
 
     // Load messages
     setCopilotSuggestions([]);
@@ -202,6 +211,19 @@ export default function InboxPage() {
     finally { setCopilotLoading(false); }
   }
 
+  async function assignTo(agentId: string) {
+    if (!selected) return;
+    setAssignOpen(false);
+    await fetch(`/api/conversations/${selected.id}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId }),
+    });
+    const name = teamMembers.find(m => m.id === agentId)?.name ?? agentId;
+    setSelected(s => s ? { ...s, assigned_to: name } : null);
+    fetchConversations();
+  }
+
   async function loadNotes(convId: string) {
     const res = await fetch(`/api/conversations/${convId}/notes`).catch(() => null);
     if (res?.ok) {
@@ -227,6 +249,20 @@ export default function InboxPage() {
     } finally {
       setNotesSaving(false);
     }
+  }
+
+  async function fetchSummary() {
+    if (!selected) return;
+    setSummaryLoading(true);
+    setSummary(null);
+    try {
+      const res = await fetch(`/api/conversations/${selected.id}/summary`);
+      if (res.ok) {
+        const data = await res.json();
+        setSummary(data.summary ?? null);
+      }
+    } catch { /* non-fatal */ }
+    finally { setSummaryLoading(false); }
   }
 
   function downloadTranscript(format: "html" | "text") {
@@ -375,6 +411,33 @@ export default function InboxPage() {
               >
                 <FileText className="w-4 h-4" />
               </button>
+              {/* Assign dropdown */}
+              {teamMembers.length > 0 && (
+                <div className="relative">
+                  <button
+                    onClick={() => setAssignOpen(o => !o)}
+                    title="Assign to agent"
+                    className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${selected.assigned_to ? "border-primary/30 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+                  >
+                    <UserPlus className="w-3 h-3" />
+                    {selected.assigned_to ? String(selected.assigned_to).slice(0, 12) : "Assign"}
+                  </button>
+                  {assignOpen && (
+                    <div className="absolute right-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl overflow-hidden w-48">
+                      {teamMembers.map(m => (
+                        <button
+                          key={m.id}
+                          onClick={() => assignTo(m.id)}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
+                        >
+                          {m.name}
+                          <span className="block text-xs text-muted-foreground truncate">{m.email}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {selected.status === "open" && (
                 <Button variant="outline" size="sm" onClick={closeConversation} className="gap-1 text-xs">
                   <CheckCircle className="w-3.5 h-3.5" /> Close
@@ -603,6 +666,25 @@ export default function InboxPage() {
                   {selected.status === "open" ? "Click ⚡ to generate suggestions." : "Suggestions available for open conversations."}
                 </p>
               )}
+            </div>
+
+            {/* AI Summary */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Summary</p>
+                <button
+                  onClick={fetchSummary}
+                  disabled={summaryLoading}
+                  className="text-[10px] text-[#c4a574] hover:text-[#d4c4b0] disabled:opacity-50"
+                >
+                  {summaryLoading ? "…" : summary ? "Refresh" : "Generate"}
+                </button>
+              </div>
+              {summaryLoading ? (
+                <div className="h-20 rounded-lg bg-white/5 animate-pulse" />
+              ) : summary ? (
+                <p className="text-xs text-muted-foreground leading-relaxed bg-white/3 p-2.5 rounded-lg border border-white/5">{summary}</p>
+              ) : null}
             </div>
           </div>
         </div>
