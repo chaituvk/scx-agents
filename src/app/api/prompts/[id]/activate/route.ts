@@ -4,11 +4,11 @@ import { activatePromptVersion } from '@/lib/prompts';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const tenantId = await getTenantFromRequest(req);
-    const { id } = params;
+    const { id } = await params;
 
     await activatePromptVersion(tenantId, id);
     return NextResponse.json({ ok: true });

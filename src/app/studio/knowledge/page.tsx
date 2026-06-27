@@ -16,6 +16,9 @@ import {
   ChevronDown,
   Zap,
   Trash2,
+  Upload,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -63,25 +66,42 @@ const getStatusColor = (status: string) => {
   }
 };
 
+interface KnowledgeDocument {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  status: "processing" | "indexed" | "error";
+  chunk_count: number;
+  created_at: string;
+}
+
 export default function KnowledgePage() {
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [knowledgeGaps, setKnowledgeGaps] = useState<KnowledgeGap[]>([]);
+  const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [expandedSource, setExpandedSource] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("sources");
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [sourcesRes, gapsRes] = await Promise.all([
+        const [sourcesRes, gapsRes, docsRes] = await Promise.all([
           fetch("/api/knowledge/sources"),
           fetch("/api/knowledge/gaps"),
+          fetch("/api/knowledge/upload"),
         ]);
         const sourcesData = await sourcesRes.json();
         const gapsData = await gapsRes.json();
+        const docsData = await docsRes.json().catch(() => ({ documents: [] }));
+        setDocuments(docsData.documents ?? []);
         setSources(
           (sourcesData.sources || []).map((s: Record<string, unknown>) => ({
             ...s,
@@ -104,6 +124,27 @@ export default function KnowledgePage() {
   }, []);
 
   const filteredSources = sources.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()));
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/knowledge/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (res.ok) {
+        setUploadResult({ ok: true, message: `Indexed "${file.name}" — ${data.document.chunk_count} chunks` });
+        setDocuments((prev) => [data.document, ...prev]);
+      } else {
+        setUploadResult({ ok: false, message: data.error ?? "Upload failed" });
+      }
+    } catch {
+      setUploadResult({ ok: false, message: "Network error" });
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleSync = async (id: string) => {
     setSyncingId(id);
@@ -200,7 +241,84 @@ export default function KnowledgePage() {
                 <Zap className="h-4 w-4 mr-2" />
                 Real-Time Grounding
               </TabsTrigger>
+              <TabsTrigger value="documents" className="data-[state=active]:bg-purple-500/20 data-[state=active]:text-purple-400">
+                <Upload className="h-4 w-4 mr-2" />
+                Upload Docs
+              </TabsTrigger>
             </TabsList>
+
+            {/* Documents Upload Tab */}
+            <TabsContent value="documents" className="mt-6">
+              <div className="space-y-6">
+                {/* Drop zone */}
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    const file = e.dataTransfer.files[0];
+                    if (file) handleUpload(file);
+                  }}
+                  className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
+                    dragOver ? "border-purple-400 bg-purple-500/10" : "border-white/10 hover:border-white/30"
+                  }`}
+                >
+                  <Upload className="w-10 h-10 mx-auto mb-4 text-muted-foreground" />
+                  <p className="text-sm font-medium mb-1">Drop a file or click to upload</p>
+                  <p className="text-xs text-muted-foreground mb-4">Supports .txt, .md, .csv, .json, .pdf — max 10 MB</p>
+                  <label>
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept=".txt,.md,.csv,.json,.pdf,text/plain,text/markdown,application/json,text/csv,application/pdf"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f); }}
+                    />
+                    <Button variant="outline" size="sm" disabled={uploading}>
+                      {uploading ? "Uploading…" : "Choose File"}
+                    </Button>
+                  </label>
+                </div>
+
+                {uploadResult && (
+                  <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${
+                    uploadResult.ok ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
+                  }`}>
+                    {uploadResult.ok
+                      ? <CheckCircle className="w-4 h-4 shrink-0" />
+                      : <XCircle className="w-4 h-4 shrink-0" />}
+                    {uploadResult.message}
+                  </div>
+                )}
+
+                {/* Documents list */}
+                {documents.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-muted-foreground">Uploaded Documents ({documents.length})</p>
+                    {documents.map((doc) => (
+                      <Card key={doc.id} className="bg-[#141414] border-white/5">
+                        <CardContent className="p-3 flex items-center gap-3">
+                          <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{doc.filename}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {(doc.size_bytes / 1024).toFixed(1)} KB · {doc.chunk_count} chunks
+                            </p>
+                          </div>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            doc.status === "indexed" ? "bg-green-500/20 text-green-400"
+                            : doc.status === "error" ? "bg-red-500/20 text-red-400"
+                            : "bg-yellow-500/20 text-yellow-400"
+                          }`}>
+                            {doc.status}
+                          </span>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </TabsContent>
 
             {/* Sources Tab */}
             <TabsContent value="sources" className="mt-6">

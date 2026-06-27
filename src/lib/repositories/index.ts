@@ -17,3 +17,6 @@ export { runtimeProfileRepo, type StoredRuntimeProfile } from "./runtime-profile
 export { tenantRepo, type Tenant } from "./tenant";
 export { playbookRepo, type Playbook } from "./playbook";
 export { playbookStateRepo, type PlaybookState } from "./playbook-state";
+export { apiKeyRepo, type ApiKey } from "./api-key";
+export { webhookRepo, type Webhook, type WebhookDelivery } from "./webhook";
+export { csatRepo, type CsatRating, type CsatSummary } from "./csat";

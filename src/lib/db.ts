@@ -544,6 +544,81 @@ function initPgSchema() {
       PRIMARY KEY (conversation_id, tenant_id)
     );
     CREATE INDEX IF NOT EXISTS idx_playbook_states_tenant ON playbook_states(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      scopes JSONB DEFAULT '["read","write"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      last_used_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      events JSONB DEFAULT '["conversation.created","message.sent","escalation.triggered","conversation.closed"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER DEFAULT 0,
+      last_attempt_at TIMESTAMPTZ,
+      next_retry_at TIMESTAMPTZ,
+      response_status INTEGER,
+      response_body TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
+
+    CREATE TABLE IF NOT EXISTS csat_ratings (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),
+      comment TEXT,
+      agent_id TEXT,
+      submitted_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(conversation_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_csat_tenant ON csat_ratings(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_csat_conversation ON csat_ratings(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS knowledge_documents (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      source_id TEXT REFERENCES knowledge_sources(id) ON DELETE SET NULL,
+      filename TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      chunk_count INTEGER DEFAULT 0,
+      error TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_tenant ON knowledge_documents(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_source ON knowledge_documents(source_id);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -878,6 +953,81 @@ function initSqliteSchema() {
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (conversation_id, tenant_id)
     );
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      scopes TEXT DEFAULT '["read","write"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      last_used_at TEXT,
+      expires_at TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      events TEXT DEFAULT '["conversation.created","message.sent","escalation.triggered","conversation.closed"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      description TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER DEFAULT 0,
+      last_attempt_at TEXT,
+      next_retry_at TEXT,
+      response_status INTEGER,
+      response_body TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
+
+    CREATE TABLE IF NOT EXISTS csat_ratings (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),
+      comment TEXT,
+      agent_id TEXT,
+      submitted_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(conversation_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_csat_tenant ON csat_ratings(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_csat_conversation ON csat_ratings(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS knowledge_documents (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      source_id TEXT REFERENCES knowledge_sources(id) ON DELETE SET NULL,
+      filename TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      chunk_count INTEGER DEFAULT 0,
+      error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_tenant ON knowledge_documents(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_source ON knowledge_documents(source_id);
   `);
 
   // Idempotent additive column migrations for existing SQLite databases.

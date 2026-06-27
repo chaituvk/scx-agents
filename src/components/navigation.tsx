@@ -25,6 +25,10 @@ import {
   Beaker,
   Building2,
   ScrollText,
+  Webhook,
+  Inbox,
+  Key,
+  Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -49,6 +53,13 @@ const studioTools = [
   { name: "Brand", href: "/studio/brand", icon: Palette },
   { name: "Playbooks", href: "/studio/playbooks", icon: ScrollText },
   { name: "Testing", href: "/studio/testing", icon: Beaker },
+  { name: "Webhooks", href: "/studio/webhooks", icon: Webhook },
+  { name: "Profiles", href: "/studio/profiles", icon: Settings },
+];
+
+const accountTools = [
+  { name: "Inbox", href: "/inbox", icon: Inbox },
+  { name: "API Keys", href: "/settings/api-keys", icon: Key },
 ];
 
 const TENANTS = [
@@ -193,6 +204,13 @@ export function Navigation() {
                 )}
               </AnimatePresence>
             </div>
+            <Link
+              href="/inbox"
+              className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
+            >
+              <Inbox className="w-3.5 h-3.5" />
+              Inbox
+            </Link>
             <Link
               href="/insights"
               className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"

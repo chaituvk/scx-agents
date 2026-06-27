@@ -29,6 +29,7 @@ import type {
   SubAgentName,
   MemoryContext,
 } from "../agents/types";
+import { dispatchWebhookEvent } from "../webhooks/delivery";
 
 const KNOWN_INTENTS = [
   "knowledge_query",
@@ -159,6 +160,11 @@ export class Orchestrator {
           agent_id: null,
           assigned_to: null,
         } as Parameters<typeof conversationRepo.create>[0]);
+        dispatchWebhookEvent({
+          type: "conversation.created",
+          tenantId: input.tenantId,
+          payload: { conversation_id: input.conversationId, channel: input.channel ?? "web", customer_id: input.customerId ?? null },
+        }).catch(() => {});
       }
     } catch (err) {
       console.error("[orchestrator] conversation auto-create failed:", err);
@@ -360,6 +366,40 @@ export class Orchestrator {
         agent_id: subName,
       }),
     ]).catch((err) => console.error("[orchestrator] message persistence failed:", err));
+
+    // 7b. Dispatch outbound webhook events (non-blocking).
+    dispatchWebhookEvent({
+      type: "message.sent",
+      tenantId: input.tenantId,
+      payload: {
+        conversation_id: input.conversationId,
+        intent: triage.intent,
+        sub_agent: subName,
+        response_preview: finalResponse.slice(0, 200),
+      },
+    }).catch(() => {});
+    if (subName === "escalation") {
+      dispatchWebhookEvent({
+        type: "escalation.triggered",
+        tenantId: input.tenantId,
+        payload: {
+          conversation_id: input.conversationId,
+          triggering_message: input.message,
+          intent: triage.intent,
+        },
+      }).catch(() => {});
+    }
+    if (subOut.done) {
+      dispatchWebhookEvent({
+        type: "playbook.completed",
+        tenantId: input.tenantId,
+        payload: {
+          conversation_id: input.conversationId,
+          sub_agent: subName,
+          variables: subOut.variables,
+        },
+      }).catch(() => {});
+    }
 
     // 8. Playbook pendingAction → persist as pending_approval so the approval
     //    gate blocks the next turn and /api/orchestrator/approve can resume.
