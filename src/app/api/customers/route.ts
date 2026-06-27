@@ -6,11 +6,10 @@ export async function GET(req: NextRequest) {
   try {
     const tenantId = await getTenantFromRequest(req);
     const q = req.nextUrl.searchParams.get("q") ?? "";
-    const limit = parseInt(req.nextUrl.searchParams.get("limit") ?? "20", 10);
-    if (!q) {
-      return NextResponse.json({ customers: [] });
-    }
-    const customers = await customerProfileRepo.search(tenantId, q, limit);
+    const limit = parseInt(req.nextUrl.searchParams.get("limit") ?? "50", 10);
+    const customers = q
+      ? await customerProfileRepo.search(tenantId, q, limit)
+      : await customerProfileRepo.list(tenantId, limit);
     return NextResponse.json({ customers });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

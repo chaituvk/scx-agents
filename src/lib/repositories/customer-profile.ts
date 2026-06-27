@@ -222,6 +222,16 @@ export const customerProfileRepo = {
     );
   },
 
+  async list(tenantId: string, limit = 50): Promise<CustomerProfile[]> {
+    const res = await query(
+      isPostgres()
+        ? `SELECT * FROM customer_profiles WHERE tenant_id = $1 ORDER BY last_seen_at DESC NULLS LAST, created_at DESC LIMIT $2`
+        : `SELECT * FROM customer_profiles WHERE tenant_id = $1 ORDER BY last_seen_at DESC, created_at DESC LIMIT $2`,
+      [tenantId, limit],
+    );
+    return res.rows.map(parseProfile);
+  },
+
   async search(
     tenantId: string,
     searchQuery: string,

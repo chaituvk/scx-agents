@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   MessageSquare, Search, Filter, ChevronRight, User, Bot, Clock,
   CheckCircle, AlertCircle, X, Send, Loader2, Star, UserPlus,
-  Sparkles, Zap, ChevronDown,
+  Sparkles, Zap, ChevronDown, Download, FileText, StickyNote, Flame,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,8 @@ interface Conversation {
   assigned_to: string | null;
   message_count: number;
   updated_at: string;
+  urgency_score?: number;
+  wait_minutes?: number;
 }
 
 interface Message {
@@ -65,11 +67,16 @@ export default function InboxPage() {
   const [csatComment, setCsatComment] = useState("");
   const [csatSubmitted, setCsatSubmitted] = useState(false);
   const [existingCsat, setExistingCsat] = useState<CsatRating | null>(null);
+  const [priorityMode, setPriorityMode] = useState(false);
   const [copilotSuggestions, setCopilotSuggestions] = useState<string[]>([]);
   const [copilotIntent, setCopilotIntent] = useState<string | null>(null);
   const [copilotSentiment, setCopilotSentiment] = useState<string | null>(null);
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotOpen, setCopilotOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<"messages" | "notes">("messages");
+  const [notes, setNotes] = useState<{ id: string; content: string; agent_id: string; created_at: string }[]>([]);
+  const [noteText, setNoteText] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -77,19 +84,25 @@ export default function InboxPage() {
 
   const fetchConversations = useCallback(async (search = q) => {
     setLoading(true);
-    const params = new URLSearchParams({ limit: "50" });
-    if (search) params.set("q", search);
-    if (statusFilter) params.set("status", statusFilter);
     try {
-      const res = await fetch(`/api/conversations/search?${params}`);
-      const data = await res.json();
-      setConversations(data.conversations ?? []);
+      if (priorityMode) {
+        const res = await fetch(`/api/conversations/priority-queue?limit=50`);
+        const data = await res.json();
+        setConversations(data.conversations ?? []);
+      } else {
+        const params = new URLSearchParams({ limit: "50" });
+        if (search) params.set("q", search);
+        if (statusFilter) params.set("status", statusFilter);
+        const res = await fetch(`/api/conversations/search?${params}`);
+        const data = await res.json();
+        setConversations(data.conversations ?? []);
+      }
     } finally {
       setLoading(false);
     }
-  }, [q, statusFilter]);
+  }, [q, statusFilter, priorityMode]);
 
-  useEffect(() => { fetchConversations(); }, [statusFilter]);
+  useEffect(() => { fetchConversations(); }, [statusFilter, priorityMode]);
 
   function handleSearch(val: string) {
     setQ(val);
@@ -107,6 +120,10 @@ export default function InboxPage() {
 
     // Stop existing stream
     if (streamRef.current) { streamRef.current.close(); streamRef.current = null; }
+
+    setActiveTab("messages");
+    setNotes([]);
+    setNoteText("");
 
     // Load messages
     setCopilotSuggestions([]);
@@ -185,6 +202,44 @@ export default function InboxPage() {
     finally { setCopilotLoading(false); }
   }
 
+  async function loadNotes(convId: string) {
+    const res = await fetch(`/api/conversations/${convId}/notes`).catch(() => null);
+    if (res?.ok) {
+      const data = await res.json();
+      setNotes(data.notes ?? []);
+    }
+  }
+
+  async function saveNote() {
+    if (!noteText.trim() || !selected) return;
+    setNotesSaving(true);
+    try {
+      const res = await fetch(`/api/conversations/${selected.id}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: noteText.trim() }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNotes((prev) => [...prev, data.note]);
+        setNoteText("");
+      }
+    } finally {
+      setNotesSaving(false);
+    }
+  }
+
+  function downloadTranscript(format: "html" | "text") {
+    if (!selected) return;
+    window.location.href = `/api/conversations/${selected.id}/transcript?format=${format}`;
+  }
+
+  function exportConversations() {
+    const params = new URLSearchParams({ format: "csv" });
+    if (statusFilter) params.set("status", statusFilter);
+    window.location.href = `/api/conversations/export?${params}`;
+  }
+
   async function closeConversation() {
     if (!selected) return;
     await fetch(`/api/conversations/${selected.id}/close`, { method: "POST" });
@@ -210,9 +265,27 @@ export default function InboxPage() {
       {/* Sidebar — conversation list */}
       <div className="w-80 border-r flex flex-col shrink-0">
         <div className="p-4 border-b">
-          <div className="flex items-center gap-2 mb-3">
-            <MessageSquare className="w-5 h-5 text-primary" />
-            <h1 className="font-semibold">Inbox</h1>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-primary" />
+              <h1 className="font-semibold">Inbox</h1>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPriorityMode((m) => !m)}
+                title={priorityMode ? "Switch to recent" : "Switch to priority queue"}
+                className={`p-1 rounded transition-colors ${priorityMode ? "text-orange-400 bg-orange-500/10" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+              >
+                <Flame className="w-4 h-4" />
+              </button>
+              <button
+                onClick={exportConversations}
+                title="Export as CSV"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <div className="relative mb-2">
             <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
@@ -256,7 +329,13 @@ export default function InboxPage() {
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium truncate">{conv.customer_name || "Anonymous"}</span>
-                  <span className={`text-xs ${SENTIMENT_COLOR[conv.sentiment] ?? "text-muted-foreground"}`}>●</span>
+                  {priorityMode && conv.urgency_score != null ? (
+                    <span className={`text-xs font-medium ${conv.urgency_score >= 60 ? "text-red-400" : conv.urgency_score >= 30 ? "text-orange-400" : "text-muted-foreground"}`}>
+                      {Math.round(conv.urgency_score)}
+                    </span>
+                  ) : (
+                    <span className={`text-xs ${SENTIMENT_COLOR[conv.sentiment] ?? "text-muted-foreground"}`}>●</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs px-1.5 py-0.5 rounded border ${STATUS_COLOR[conv.status] ?? ""}`}>
@@ -264,7 +343,9 @@ export default function InboxPage() {
                   </span>
                   <span className="text-xs text-muted-foreground">{conv.channel}</span>
                   <span className="text-xs text-muted-foreground ml-auto">
-                    {new Date(conv.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {priorityMode && conv.wait_minutes != null
+                      ? `${conv.wait_minutes}m`
+                      : new Date(conv.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
               </button>
@@ -287,6 +368,13 @@ export default function InboxPage() {
               <Badge variant="outline" className={STATUS_COLOR[selected.status] ?? ""}>
                 {selected.status}
               </Badge>
+              <button
+                onClick={() => downloadTranscript("html")}
+                title="Download transcript"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              >
+                <FileText className="w-4 h-4" />
+              </button>
               {selected.status === "open" && (
                 <Button variant="outline" size="sm" onClick={closeConversation} className="gap-1 text-xs">
                   <CheckCircle className="w-3.5 h-3.5" /> Close
@@ -295,7 +383,31 @@ export default function InboxPage() {
             </div>
           </div>
 
+          {/* Tab bar */}
+          <div className="flex border-b px-4 shrink-0">
+            <button
+              onClick={() => setActiveTab("messages")}
+              className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
+                activeTab === "messages" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Messages
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab("notes");
+                if (notes.length === 0) loadNotes(selected.id);
+              }}
+              className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors flex items-center gap-1 ${
+                activeTab === "notes" ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <StickyNote className="w-3 h-3" /> Notes
+            </button>
+          </div>
+
           {/* Messages */}
+          {activeTab === "messages" && (
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {msgLoading ? (
               <div className="flex justify-center py-12">
@@ -335,6 +447,29 @@ export default function InboxPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
+          )}
+
+          {/* Notes tab */}
+          {activeTab === "notes" && (
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {notes.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <StickyNote className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                <p className="text-sm">No internal notes yet</p>
+                <p className="text-xs opacity-60 mt-1">Notes are only visible to your team</p>
+              </div>
+            ) : (
+              notes.map((n) => (
+                <div key={n.id} className="rounded-lg p-3 bg-yellow-500/5 border border-yellow-500/20">
+                  <p className="text-xs text-muted-foreground mb-1">
+                    Agent {n.agent_id.slice(0, 8)}… · {new Date(n.created_at).toLocaleString()}
+                  </p>
+                  <p className="text-sm whitespace-pre-wrap">{n.content}</p>
+                </div>
+              ))
+            )}
+          </div>
+          )}
 
           {/* CSAT */}
           {selected.status === "closed" && (
@@ -373,8 +508,8 @@ export default function InboxPage() {
             </div>
           )}
 
-          {/* Reply bar */}
-          {selected.status === "open" && (
+          {/* Reply bar / Note input */}
+          {activeTab === "messages" && selected.status === "open" && (
             <div className="border-t p-3 flex gap-2 shrink-0">
               <Textarea
                 className="min-h-[60px] text-sm resize-none"
@@ -387,6 +522,27 @@ export default function InboxPage() {
               />
               <Button onClick={sendReply} disabled={!reply.trim() || sending} className="self-end">
                 {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              </Button>
+            </div>
+          )}
+          {activeTab === "notes" && (
+            <div className="border-t p-3 flex gap-2 shrink-0">
+              <Textarea
+                className="min-h-[60px] text-sm resize-none border-yellow-500/20 focus:border-yellow-500/50"
+                placeholder="Add an internal note (only visible to agents)…"
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNote(); }
+                }}
+              />
+              <Button
+                onClick={saveNote}
+                disabled={!noteText.trim() || notesSaving}
+                className="self-end bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/30 border border-yellow-500/30"
+                variant="outline"
+              >
+                {notesSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <StickyNote className="w-4 h-4" />}
               </Button>
             </div>
           )}

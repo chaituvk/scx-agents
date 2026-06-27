@@ -1,107 +1,79 @@
-// Export conversations + messages as JSON or CSV.
-// GET /api/conversations/export?format=json|csv&status=open|closed&limit=1000
-// Returns a downloadable file.
-
+// GET /api/conversations/export?format=csv|json&status=open|resolved|escalated&from=ISO&to=ISO
 import { NextRequest, NextResponse } from "next/server";
-import { query } from "@/lib/db";
 import { requireAuth } from "@/lib/api-auth";
 import { getTenantFromRequest } from "@/lib/tenant";
+import { query } from "@/lib/db";
 
 export const runtime = "nodejs";
-
-function toCSV(rows: Record<string, unknown>[]): string {
-  if (rows.length === 0) return "";
-  const keys = Object.keys(rows[0]);
-  const header = keys.map((k) => `"${k}"`).join(",");
-  const lines = rows.map((r) =>
-    keys.map((k) => {
-      const v = r[k];
-      if (v === null || v === undefined) return "";
-      const s = typeof v === "object" ? JSON.stringify(v) : String(v);
-      return `"${s.replace(/"/g, '""')}"`;
-    }).join(",")
-  );
-  return [header, ...lines].join("\n");
-}
 
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req, "conversations", "read");
   if (auth instanceof NextResponse) return auth;
-
   const tenantId = await getTenantFromRequest(req);
-  const { searchParams } = new URL(req.url);
 
-  const format = searchParams.get("format") === "csv" ? "csv" : "json";
-  const status = searchParams.get("status") ?? "";
-  const limit = Math.min(Number(searchParams.get("limit") ?? "1000"), 5000);
-  const includeMessages = searchParams.get("messages") === "true";
+  const { searchParams } = req.nextUrl;
+  const format = searchParams.get("format") ?? "csv";
+  const status = searchParams.get("status");
+  const channel = searchParams.get("channel");
+  const fromDate = searchParams.get("from");
+  const toDate = searchParams.get("to");
 
   const conditions: string[] = ["c.tenant_id = $1"];
   const params: unknown[] = [tenantId];
+  let i = 2;
 
-  if (status && ["open", "closed", "escalated"].includes(status)) {
-    params.push(status);
-    conditions.push(`c.status = $${params.length}`);
-  }
+  if (status) { conditions.push(`c.status = $${i++}`); params.push(status); }
+  if (channel) { conditions.push(`c.channel = $${i++}`); params.push(channel); }
+  if (fromDate) { conditions.push(`c.created_at >= $${i++}`); params.push(fromDate); }
+  if (toDate) { conditions.push(`c.created_at <= $${i++}`); params.push(toDate); }
 
   const where = conditions.join(" AND ");
-  params.push(limit);
-
-  const convResult = await query(
-    `SELECT c.id, c.customer_name, c.customer_email, c.channel, c.status,
-            c.sentiment, c.assigned_to, c.topic, c.priority, c.created_at, c.updated_at
+  const result = await query(
+    `SELECT c.id, c.customer_name, c.customer_email, c.channel, c.status, c.sentiment,
+            c.topic, c.priority, c.assigned_to, c.created_at, c.updated_at,
+            COUNT(m.id) AS message_count
      FROM conversations c
+     LEFT JOIN messages m ON m.conversation_id = c.id AND m.tenant_id = c.tenant_id
      WHERE ${where}
-     ORDER BY c.created_at DESC
-     LIMIT $${params.length}`,
-    params
+     GROUP BY c.id
+     ORDER BY c.updated_at DESC
+     LIMIT 5000`,
+    params,
   );
 
-  const conversations = convResult.rows;
+  const rows = result.rows;
 
-  if (includeMessages && conversations.length > 0) {
-    const convIds = conversations.map((c) => c.id as string);
-    // Fetch messages for all conversations
-    const msgResult = await query(
-      `SELECT conversation_id, role, content, agent_id, intent, created_at
-       FROM messages
-       WHERE tenant_id = $1 AND conversation_id IN (${convIds.map((_, i) => `$${i + 2}`).join(",")})
-       ORDER BY created_at ASC`,
-      [tenantId, ...convIds]
-    );
-
-    const messagesByConv: Record<string, unknown[]> = {};
-    for (const msg of msgResult.rows) {
-      const cid = msg.conversation_id as string;
-      if (!messagesByConv[cid]) messagesByConv[cid] = [];
-      messagesByConv[cid].push(msg);
-    }
-
-    for (const conv of conversations) {
-      (conv as Record<string, unknown>).messages = messagesByConv[conv.id as string] ?? [];
-    }
+  if (format === "json") {
+    return NextResponse.json({ conversations: rows, count: rows.length });
   }
 
-  const now = new Date().toISOString().slice(0, 10);
-  const filename = `conversations-export-${now}.${format}`;
+  const header = [
+    "id", "customer_name", "customer_email", "channel", "status",
+    "sentiment", "topic", "priority", "assigned_to", "message_count",
+    "created_at", "updated_at",
+  ];
+  const escape = (v: unknown) => {
+    if (v == null) return "";
+    const s = String(v).replace(/"/g, '""');
+    return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s}"` : s;
+  };
+  const csvLines = [
+    header.join(","),
+    ...rows.map((r: Record<string, unknown>) =>
+      [
+        r.id, r.customer_name, r.customer_email, r.channel, r.status,
+        r.sentiment, r.topic, r.priority, r.assigned_to, r.message_count,
+        r.created_at, r.updated_at,
+      ]
+        .map(escape)
+        .join(","),
+    ),
+  ];
 
-  if (format === "csv") {
-    // Flatten for CSV (no nested messages)
-    const csv = toCSV(conversations.map((c) => {
-      const { messages: _m, ...rest } = c as Record<string, unknown>;
-      return rest;
-    }));
-    return new NextResponse(csv, {
-      headers: {
-        "Content-Type": "text/csv",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-      },
-    });
-  }
-
-  return new NextResponse(JSON.stringify({ conversations, exported_at: new Date().toISOString(), count: conversations.length }, null, 2), {
+  const filename = `conversations-${new Date().toISOString().slice(0, 10)}.csv`;
+  return new Response(csvLines.join("\n"), {
     headers: {
-      "Content-Type": "application/json",
+      "Content-Type": "text/csv; charset=utf-8",
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
