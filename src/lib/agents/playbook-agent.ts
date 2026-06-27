@@ -108,6 +108,7 @@ export const playbookAgent: SubAgent = {
       history: input.context.history.map((h) => ({ role: h.role, content: h.content })),
       knowledge: input.context.knowledge.map((k) => ({ title: k.title, content: k.content, source: k.source })),
       variables: mergedVariables,
+      languageInstruction: input.context.languageInstruction,
     }
 
     const output = await runPlaybook(playbook, runContext)

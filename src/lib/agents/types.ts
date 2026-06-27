@@ -171,6 +171,12 @@ export interface MemoryContext {
   profile?: { id: string; name?: string; email?: string; tier?: string };
   history: Message[];
   knowledge: RetrievePassage[];
+  /**
+   * Language instruction injected by the orchestrator when a non-English
+   * language is detected. Sub-agents should prepend this to their system
+   * prompt so the LLM responds in the customer's language.
+   */
+  languageInstruction?: string;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

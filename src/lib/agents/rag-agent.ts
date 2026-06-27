@@ -36,7 +36,10 @@ export const ragAgent: SubAgent = {
     // see which profile governed the turn.
     const profile = await loadSpecialistProfile(ctx.tenantId, input.triage.specialistId);
     await auditProfileBinding(ctx.audit, "rag", profile, input.triage.specialistId);
-    const systemPrompt = applyGuardrailsToSystemPrompt(RAG_SYSTEM_PROMPT, profile);
+    const basePrompt = input.context.languageInstruction
+      ? `${input.context.languageInstruction}\n\n${RAG_SYSTEM_PROMPT}`
+      : RAG_SYSTEM_PROMPT;
+    const systemPrompt = applyGuardrailsToSystemPrompt(basePrompt, profile);
 
     const retrieved: RetrieveOutput = await retrieveSkill.run(
       { query: input.message, topK: 3 },

@@ -46,6 +46,8 @@ export interface PlaybookRunContext {
   history: Array<{ role: string; content: string }>
   knowledge: Array<{ title: string; content: string; source: string }>
   variables: Record<string, string>
+  /** Injected by orchestrator when the customer is communicating in a non-English language. */
+  languageInstruction?: string
 }
 
 export interface PlaybookToolCall {

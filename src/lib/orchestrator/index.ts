@@ -31,6 +31,9 @@ import type {
 } from "../agents/types";
 import { dispatchWebhookEvent } from "../webhooks/delivery";
 import { customerProfileRepo } from "../repositories/customer-profile";
+import { detectLanguage, getSystemLanguageInstruction, type SupportedLanguage } from "../i18n/detect-language";
+import { applyRoutingRules } from "../routing/evaluate";
+import { conversationTagsRepo } from "../repositories/conversation-tags";
 
 const KNOWN_INTENTS = [
   "knowledge_query",
@@ -54,6 +57,7 @@ interface SessionSnapshot {
   lastIntent: string | null;
   topicStack: TopicFrame[];
   pendingApproval: PendingApproval | null;
+  detectedLanguage: SupportedLanguage | null;
 }
 
 async function loadSession(tenantId: string, conversationId: string): Promise<SessionSnapshot> {
@@ -62,8 +66,12 @@ async function loadSession(tenantId: string, conversationId: string): Promise<Se
     return {
       activeJourneyId: null, currentNodeId: null, activeAgent: null,
       lastIntent: null, topicStack: [], pendingApproval: null,
+      detectedLanguage: null,
     };
   }
+  // detected_language is stored in dialog_states.variables as a special key
+  const variables = row.variables as Record<string, unknown> | null | undefined;
+  const storedLang = variables?.detected_language as SupportedLanguage | undefined;
   return {
     activeJourneyId: row.journey_id ?? null,
     currentNodeId: row.current_node_id ?? null,
@@ -73,6 +81,7 @@ async function loadSession(tenantId: string, conversationId: string): Promise<Se
     pendingApproval: row.pending_approval && typeof row.pending_approval === "object"
       ? (row.pending_approval as unknown as PendingApproval)
       : null,
+    detectedLanguage: storedLang ?? null,
   };
 }
 
@@ -210,6 +219,47 @@ export class Orchestrator {
       };
     }
 
+    // 1c. Language detection — detect the customer's language from the
+    //     incoming message. If confidence is sufficient and the language is
+    //     non-English, inject a language instruction into the memory context
+    //     so sub-agents respond in the detected language.
+    //     On subsequent turns we re-use the stored language if the new
+    //     detection confidence is low (e.g. very short messages like "ok").
+    const LANG_CONFIDENCE_THRESHOLD = 0.6;
+    const freshDetection = detectLanguage(input.message);
+    let effectiveLang: SupportedLanguage;
+    if (freshDetection.confidence >= LANG_CONFIDENCE_THRESHOLD) {
+      effectiveLang = freshDetection.language;
+    } else if (session.detectedLanguage && session.detectedLanguage !== "unknown") {
+      // Carry forward the previously detected language for short/ambiguous messages
+      effectiveLang = session.detectedLanguage;
+    } else {
+      effectiveLang = freshDetection.language;
+    }
+    const langInstruction = getSystemLanguageInstruction(effectiveLang);
+    if (langInstruction) {
+      memCtx.languageInstruction = langInstruction;
+    }
+    // Persist detected_language to dialog_states.variables (best-effort, fire-and-forget).
+    // We only write if the language changed or is being set for the first time.
+    if (effectiveLang !== "unknown" && effectiveLang !== session.detectedLanguage) {
+      // Merge with variables already present on the dialog state row so we
+      // don't clobber any slot values written by earlier turns.
+      const existingDialogRow = await dialogStateRepo.findByConversationForTenant(
+        input.conversationId,
+        input.tenantId,
+      );
+      const existingVars =
+        existingDialogRow?.variables && typeof existingDialogRow.variables === "object"
+          ? existingDialogRow.variables
+          : {};
+      dialogStateRepo
+        .upsertByConversationForTenant(input.tenantId, input.conversationId, {
+          variables: { ...existingVars, detected_language: effectiveLang },
+        })
+        .catch((err) => console.error("[orchestrator] language persist failed:", err));
+    }
+
     // 1b. Pending-approval gate (Stage 7). When a prior turn paused on a
     // policy_check, the conversation is suspended until POST
     // /api/orchestrator/approve clears dialog_states.pending_approval.
@@ -280,6 +330,48 @@ export class Orchestrator {
     // forced/hint-driven route is in effect).
     if (activePlaybookId && !input.forceSubAgent && !input.requestedJourneyId && triage.subAgent !== 'escalation') {
       triage = { ...triage, subAgent: 'playbook', playbookId: activePlaybookId };
+    }
+
+    // Routing rules — evaluate after triage and playbook assignment so rules
+    // can override or augment the routing decision. Skipped for forced/hint
+    // turns to preserve caller intent.
+    if (!input.forceSubAgent && !input.requestedJourneyId) {
+      const routingAction = await applyRoutingRules(input.tenantId, {
+        message: input.message,
+        channel: input.channel ?? "web",
+        customerId: input.customerId,
+        customerLanguage: customerProfile?.language ?? undefined,
+        customerTags: customerProfile?.tags ?? undefined,
+        hourOfDay: new Date().getUTCHours(),
+      }).catch(() => null);
+
+      if (routingAction) {
+        await audit.emit("route_decision", {
+          intent: "routing_rule",
+          subAgent: routingAction.type,
+          rationale: `routing rule: ${routingAction.ruleName} (${routingAction.ruleId})`,
+          confidence: 1.0,
+        });
+
+        if (routingAction.type === "assign_playbook") {
+          const playbookId = routingAction.payload.playbook_id as string | undefined;
+          if (playbookId) {
+            triage = { ...triage, subAgent: "playbook", playbookId };
+          }
+        } else if (routingAction.type === "escalate") {
+          triage = { ...triage, subAgent: "escalation" };
+        } else if (routingAction.type === "set_priority") {
+          const priority = routingAction.payload.priority as string | undefined;
+          if (priority) {
+            conversationRepo.update(input.conversationId, { priority }).catch(() => {});
+          }
+        } else if (routingAction.type === "add_tag") {
+          const tag = routingAction.payload.tag as string | undefined;
+          if (tag) {
+            conversationTagsRepo.addTag(input.conversationId, input.tenantId, tag).catch(() => {});
+          }
+        }
+      }
     }
 
     await audit.emit("route_decision", {

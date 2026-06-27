@@ -737,6 +737,66 @@ function initPgSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_conv_tags_tenant ON conversation_tags(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_conv_tags_tag ON conversation_tags(tag);
+
+    CREATE TABLE IF NOT EXISTS routing_rules (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      priority INTEGER DEFAULT 100,
+      status TEXT NOT NULL DEFAULT 'active',
+      conditions JSONB NOT NULL DEFAULT '[]',
+      condition_logic TEXT NOT NULL DEFAULT 'any',
+      action_type TEXT NOT NULL,
+      action_payload JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_tenant ON routing_rules(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_status ON routing_rules(status);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_priority ON routing_rules(tenant_id, priority);
+
+    CREATE TABLE IF NOT EXISTS sla_configs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      first_response_minutes INTEGER NOT NULL DEFAULT 60,
+      resolution_minutes INTEGER NOT NULL DEFAULT 480,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_configs_tenant ON sla_configs(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS sla_breaches (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      sla_config_id TEXT REFERENCES sla_configs(id) ON DELETE SET NULL,
+      breach_type TEXT NOT NULL,
+      breached_at TIMESTAMPTZ NOT NULL,
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_tenant ON sla_breaches(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_conv ON sla_breaches(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS canned_responses (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      category TEXT DEFAULT 'general',
+      tags JSONB DEFAULT '[]',
+      shortcut TEXT,
+      use_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_tenant ON canned_responses(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_category ON canned_responses(category);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_canned_responses_shortcut ON canned_responses(tenant_id, shortcut) WHERE shortcut IS NOT NULL;
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -1257,6 +1317,66 @@ function initSqliteSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_conv_tags_tenant ON conversation_tags(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_conv_tags_tag ON conversation_tags(tag);
+
+    CREATE TABLE IF NOT EXISTS routing_rules (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      priority INTEGER DEFAULT 100,
+      status TEXT NOT NULL DEFAULT 'active',
+      conditions TEXT NOT NULL DEFAULT '[]',
+      condition_logic TEXT NOT NULL DEFAULT 'any',
+      action_type TEXT NOT NULL,
+      action_payload TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_tenant ON routing_rules(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_status ON routing_rules(status);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_priority ON routing_rules(tenant_id, priority);
+
+    CREATE TABLE IF NOT EXISTS sla_configs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      first_response_minutes INTEGER NOT NULL DEFAULT 60,
+      resolution_minutes INTEGER NOT NULL DEFAULT 480,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_configs_tenant ON sla_configs(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS sla_breaches (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      sla_config_id TEXT REFERENCES sla_configs(id) ON DELETE SET NULL,
+      breach_type TEXT NOT NULL,
+      breached_at TEXT NOT NULL,
+      acknowledged_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_tenant ON sla_breaches(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_conv ON sla_breaches(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS canned_responses (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      category TEXT DEFAULT 'general',
+      tags TEXT DEFAULT '[]',
+      shortcut TEXT,
+      use_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_tenant ON canned_responses(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_category ON canned_responses(category);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_canned_responses_shortcut ON canned_responses(tenant_id, shortcut);
   `);
 
   // Idempotent additive column migrations for existing SQLite databases.
@@ -1629,6 +1749,77 @@ async function doSeed() {
     await runQ(
       `INSERT OR IGNORE INTO knowledge_gaps (id, tenant_id, question, frequency, status, suggested_answer, source_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [g.id, g.tenant_id, g.question, g.frequency, g.status, g.suggested_answer, g.source_ids ? JSON.stringify(g.source_ids) : null, now]
+    );
+  }
+
+  // ── Canned Responses (r-mobile) ──────────────────────────────────
+  const cannedResponses = [
+    {
+      id: "cr-1",
+      tenant_id: "r-mobile",
+      title: "Greeting / Opening",
+      content: "Hi there! Welcome to R-Mobile support. My name is Alex and I'm here to help you today. Could you please describe what you need assistance with?",
+      category: "greeting",
+      tags: JSON.stringify(["greeting", "opening", "welcome"]),
+      shortcut: "/hi",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-2",
+      tenant_id: "r-mobile",
+      title: "Looking Into That",
+      content: "I completely understand your concern. Let me look into that for you right away — this will just take a moment.",
+      category: "general",
+      tags: JSON.stringify(["lookup", "investigating", "hold"]),
+      shortcut: "/look",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-3",
+      tenant_id: "r-mobile",
+      title: "Order / Account Tracking",
+      content: "I've pulled up your account details. Your order is currently {{order_status}} and is expected to arrive by {{estimated_delivery}}. You can also track it in real-time at {{tracking_link}}.",
+      category: "order",
+      tags: JSON.stringify(["order", "tracking", "shipping", "delivery"]),
+      shortcut: "/track",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-4",
+      tenant_id: "r-mobile",
+      title: "Apology Template",
+      content: "I sincerely apologize for the inconvenience this has caused you. This is certainly not the experience we want our customers to have. I'm going to make this right for you.",
+      category: "general",
+      tags: JSON.stringify(["apology", "sorry", "escalation"]),
+      shortcut: "/sorry",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-5",
+      tenant_id: "r-mobile",
+      title: "Closing / Farewell",
+      content: "Thank you for contacting R-Mobile support! I'm glad I could help resolve your issue today. If you have any other questions in the future, please don't hesitate to reach out. Have a wonderful day!",
+      category: "closing",
+      tags: JSON.stringify(["closing", "farewell", "goodbye"]),
+      shortcut: "/bye",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-6",
+      tenant_id: "r-mobile",
+      title: "Escalation to Manager",
+      content: "I understand your frustration, and I'd like to escalate this to my supervisor who has additional authority to help resolve this for you. Please allow me to transfer you — your wait time should be under 2 minutes.",
+      category: "escalation",
+      tags: JSON.stringify(["escalation", "manager", "supervisor", "transfer"]),
+      shortcut: "/escalate",
+      created_by: "user-1",
+    },
+  ];
+
+  for (const cr of cannedResponses) {
+    await runQ(
+      `INSERT OR IGNORE INTO canned_responses (id, tenant_id, title, content, category, tags, shortcut, use_count, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [cr.id, cr.tenant_id, cr.title, cr.content, cr.category, cr.tags, cr.shortcut, 0, cr.created_by, now, now]
     );
   }
 

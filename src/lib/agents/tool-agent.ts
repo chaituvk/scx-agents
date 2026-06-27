@@ -120,7 +120,10 @@ export const toolAgent: SubAgent = {
 
     const actResult = await actSkill.run({ tool: plan.tool, params }, ctx);
 
-    const summarySystemPrompt = applyGuardrailsToSystemPrompt(SUMMARIZE_SYSTEM, profile);
+    const baseSummarizePrompt = input.context.languageInstruction
+      ? `${input.context.languageInstruction}\n\n${SUMMARIZE_SYSTEM}`
+      : SUMMARIZE_SYSTEM;
+    const summarySystemPrompt = applyGuardrailsToSystemPrompt(baseSummarizePrompt, profile);
     const summary = await respondSkill.run(
       {
         systemPrompt: summarySystemPrompt,

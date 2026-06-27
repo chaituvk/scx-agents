@@ -63,7 +63,8 @@ export async function runPlaybook(
   const variableContext = Object.keys(variables).length > 0
     ? `\n\n## Already known from this conversation\n${Object.entries(variables).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`
     : ''
-  const systemPrompt = `${baseSystemPrompt}${variableContext}\n\n${toolInstructions}`
+  const langPrefix = context.languageInstruction ? `${context.languageInstruction}\n\n` : ''
+  const systemPrompt = `${langPrefix}${baseSystemPrompt}${variableContext}\n\n${toolInstructions}`
 
   // Build message history — prior turns give the LLM full context of
   // where the conversation is without needing an explicit node pointer.
