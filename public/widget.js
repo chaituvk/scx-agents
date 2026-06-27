@@ -272,4 +272,82 @@
   }
 
   render();
+
+  // ── Proactive triggers ────────────────────────────────────────────────
+  // Fetch active triggers from the server and fire them based on behavioral
+  // signals (page dwell, scroll depth, exit intent).
+
+  const PROACTIVE_COOLDOWN_KEY = `sierra_trigger_cooldown_${tenant}`;
+
+  function isTriggerCoolingDown(triggerId, cooldownHours) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PROACTIVE_COOLDOWN_KEY) || '{}');
+      const firedAt = stored[triggerId];
+      if (!firedAt) return false;
+      return (Date.now() - firedAt) < cooldownHours * 3600 * 1000;
+    } catch { return false; }
+  }
+
+  function markTriggerFired(triggerId) {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PROACTIVE_COOLDOWN_KEY) || '{}');
+      stored[triggerId] = Date.now();
+      localStorage.setItem(PROACTIVE_COOLDOWN_KEY, JSON.stringify(stored));
+    } catch {}
+  }
+
+  function fireTrigger(trigger) {
+    if (isOpen || isTriggerCoolingDown(trigger.id, trigger.cooldown_hours)) return;
+    markTriggerFired(trigger.id);
+    // Pre-open widget with the trigger message
+    isOpen = true;
+    conversationId = null;
+    showPicker = false;
+    messages = [{ id: 'p0', role: 'agent', content: trigger.message, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }];
+    // Create a conversation in the background
+    api('/api/widget/conversations', {
+      method: 'POST',
+      body: JSON.stringify({ tenant, customerName: 'Visitor', customerEmail: '' }),
+    }).then(conv => { conversationId = conv.conversation?.id || null; }).catch(() => {});
+    render();
+  }
+
+  function setupTrigger(trigger) {
+    const delay = (trigger.delay_seconds || 30) * 1000;
+    if (trigger.trigger_type === 'page_dwell') {
+      setTimeout(() => fireTrigger(trigger), delay);
+    } else if (trigger.trigger_type === 'exit_intent') {
+      document.addEventListener('mouseleave', function handler(e) {
+        if (e.clientY <= 0) { fireTrigger(trigger); document.removeEventListener('mouseleave', handler); }
+      });
+    } else if (trigger.trigger_type === 'scroll_depth') {
+      const threshold = trigger.conditions?.scroll_percent || 75;
+      window.addEventListener('scroll', function handler() {
+        const pct = (window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100;
+        if (pct >= threshold) { fireTrigger(trigger); window.removeEventListener('scroll', handler); }
+      });
+    } else if (trigger.trigger_type === 'return_visitor') {
+      const minVisits = trigger.conditions?.visit_count_min || 2;
+      try {
+        const visits = parseInt(localStorage.getItem(`sierra_visits_${tenant}`) || '0', 10) + 1;
+        localStorage.setItem(`sierra_visits_${tenant}`, String(visits));
+        if (visits >= minVisits) setTimeout(() => fireTrigger(trigger), delay);
+      } catch {}
+    }
+  }
+
+  // Load triggers after a short boot delay to avoid blocking page load
+  setTimeout(() => {
+    fetch(`${API_BASE}/api/widget/triggers?tenant_id=${encodeURIComponent(tenant)}`)
+      .then(r => r.json())
+      .then(data => {
+        const triggers = (data.triggers || []).sort((a, b) => (a.priority || 100) - (b.priority || 100));
+        // Only fire the highest-priority matching trigger to avoid spamming
+        let fired = false;
+        for (const trigger of triggers) {
+          if (!fired) { setupTrigger(trigger); fired = true; }
+        }
+      })
+      .catch(() => {});
+  }, 2000);
 })();

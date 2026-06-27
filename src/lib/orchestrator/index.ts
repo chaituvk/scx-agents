@@ -38,6 +38,7 @@ import { setTyping } from "../../app/api/conversations/[id]/typing/route";
 import { analyzeSentiment, blendSentiment } from "../sentiment/analyze";
 import { slaRepo } from "../repositories/sla";
 import { getPlaybookVariant, recordExperimentOutcome } from "../experiments/ab-router";
+import { autoAssignAgent, assignConversation } from "../routing/auto-assign";
 
 const KNOWN_INTENTS = [
   "knowledge_query",
@@ -332,13 +333,29 @@ export class Orchestrator {
     // If an active playbook is configured for this tenant, prefer it over
     // the triage-selected sub-agent (unless triage selected escalation or a
     // forced/hint-driven route is in effect).
-    // A/B experiment overrides the active playbook when an active experiment exists.
+    // Priority: A/B experiment → language-specific playbook → active playbook.
     if (!input.forceSubAgent && !input.requestedJourneyId && triage.subAgent !== 'escalation') {
       const abPlaybookId = await getPlaybookVariant(input.tenantId, input.conversationId).catch(() => null);
       if (abPlaybookId) {
         triage = { ...triage, subAgent: 'playbook', playbookId: abPlaybookId };
-      } else if (activePlaybookId) {
-        triage = { ...triage, subAgent: 'playbook', playbookId: activePlaybookId };
+      } else {
+        // Look for a language-tagged playbook when a non-English language is detected.
+        // Convention: playbook name ends with " [lang]" e.g. "Support [ja]"
+        let resolvedPlaybookId = activePlaybookId;
+        if (effectiveLang !== "en" && effectiveLang !== "unknown") {
+          try {
+            const { playbookRepo: pb } = await import('../repositories/playbook');
+            const all = await pb.findAll(input.tenantId);
+            const langPlaybook = all.find(
+              (p: { status: string; name: string }) =>
+                p.status === 'active' && p.name.endsWith(` [${effectiveLang}]`)
+            );
+            if (langPlaybook) resolvedPlaybookId = langPlaybook.id;
+          } catch { /* fall through to default */ }
+        }
+        if (resolvedPlaybookId) {
+          triage = { ...triage, subAgent: 'playbook', playbookId: resolvedPlaybookId };
+        }
       }
     }
 
@@ -535,6 +552,12 @@ export class Orchestrator {
       },
     }).catch(() => {});
     if (subName === "escalation") {
+      // Auto-assign to the best available human agent (non-blocking)
+      autoAssignAgent(input.tenantId, input.conversationId, triage.intent).then(agentId => {
+        if (agentId) {
+          return assignConversation(input.conversationId, input.tenantId, agentId);
+        }
+      }).catch(() => {});
       dispatchWebhookEvent({
         type: "escalation.triggered",
         tenantId: input.tenantId,

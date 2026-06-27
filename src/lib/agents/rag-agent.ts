@@ -2,6 +2,7 @@
 
 import { retrieveSkill, respondSkill } from "../skills";
 import { policyChecker } from "../policy";
+import { knowledgeGapRepo } from "../repositories";
 import {
   loadSpecialistProfile,
   applyGuardrailsToSystemPrompt,
@@ -59,6 +60,19 @@ export const ragAgent: SubAgent = {
 
     let content = responded.content || SAFE_FALLBACK;
     const citations = responded.citations ?? [];
+
+    // Auto-record knowledge gaps: when no passages were found, the question
+    // likely falls outside the knowledge base. Log it so operators can fill the gap.
+    if (retrieved.passages.length === 0) {
+      knowledgeGapRepo.create({
+        tenant_id: ctx.tenantId,
+        question: input.message,
+        frequency: 1,
+        status: "open",
+        suggested_answer: null,
+        source_ids: null,
+      }).catch(() => {});
+    }
 
     const decision = await policyChecker.validateResponse({
       content,
