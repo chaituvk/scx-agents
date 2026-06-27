@@ -61,11 +61,11 @@ const products = [
 const studioTools = [
   { name: "Agent Studio", href: "/studio", icon: Cpu },
   { name: "Ghostwriter", href: "/studio/ghostwriter", icon: Sparkles },
-  { name: "Flows", href: "/studio/flows", icon: Workflow },
+  { name: "Playbooks", href: "/studio/playbooks", icon: ScrollText },
+  { name: "Policies", href: "/studio/policies", icon: Shield },
   { name: "Simulation", href: "/studio/simulation", icon: FlaskConical },
   { name: "Knowledge", href: "/studio/knowledge", icon: BookOpen },
   { name: "Brand", href: "/studio/brand", icon: Palette },
-  { name: "Playbooks", href: "/studio/playbooks", icon: ScrollText },
   { name: "Testing", href: "/studio/testing", icon: Beaker },
   { name: "Experiments", href: "/studio/experiments", icon: FlaskConical },
   { name: "Proactive", href: "/studio/proactive", icon: Zap },
