@@ -6,6 +6,7 @@ import {
   MessageSquare, Search, Filter, ChevronRight, User, Bot, Clock,
   CheckCircle, AlertCircle, X, Send, Loader2, Star, UserPlus,
   Sparkles, Zap, ChevronDown, Download, FileText, StickyNote, Flame,
+  Square, CheckSquare, Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,6 +84,9 @@ export default function InboxPage() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [convTags, setConvTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkActing, setBulkActing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -305,6 +309,67 @@ export default function InboxPage() {
     setConversations(prev => prev.map(c => c.id === selected.id ? { ...c, priority } : c));
   }
 
+  function toggleBulkSelect(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setBulkSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (bulkSelected.size === conversations.length) {
+      setBulkSelected(new Set());
+    } else {
+      setBulkSelected(new Set(conversations.map(c => c.id)));
+    }
+  }
+
+  async function bulkClose() {
+    if (!bulkSelected.size) return;
+    setBulkActing(true);
+    await Promise.all([...bulkSelected].map(id =>
+      fetch(`/api/conversations/${id}/close`, { method: "POST" }).catch(() => null)
+    ));
+    setBulkSelected(new Set());
+    setBulkMode(false);
+    fetchConversations();
+    setBulkActing(false);
+  }
+
+  async function bulkAssign(agentId: string) {
+    if (!bulkSelected.size) return;
+    setBulkActing(true);
+    await Promise.all([...bulkSelected].map(id =>
+      fetch(`/api/conversations/${id}/assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId }),
+      }).catch(() => null)
+    ));
+    setBulkSelected(new Set());
+    setBulkMode(false);
+    fetchConversations();
+    setBulkActing(false);
+  }
+
+  async function bulkSetPriority(priority: string) {
+    if (!bulkSelected.size) return;
+    setBulkActing(true);
+    await Promise.all([...bulkSelected].map(id =>
+      fetch(`/api/conversations/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ priority }),
+      }).catch(() => null)
+    ));
+    setBulkSelected(new Set());
+    setBulkMode(false);
+    fetchConversations();
+    setBulkActing(false);
+  }
+
   function downloadTranscript(format: "html" | "text") {
     if (!selected) return;
     window.location.href = `/api/conversations/${selected.id}/transcript?format=${format}`;
@@ -348,6 +413,13 @@ export default function InboxPage() {
             </div>
             <div className="flex items-center gap-1">
               <button
+                onClick={() => { setBulkMode(m => !m); setBulkSelected(new Set()); }}
+                title="Bulk select"
+                className={`p-1 rounded transition-colors ${bulkMode ? "text-primary bg-primary/10" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
+              >
+                <CheckSquare className="w-4 h-4" />
+              </button>
+              <button
                 onClick={() => setPriorityMode((m) => !m)}
                 title={priorityMode ? "Switch to recent" : "Switch to priority queue"}
                 className={`p-1 rounded transition-colors ${priorityMode ? "text-orange-400 bg-orange-500/10" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"}`}
@@ -387,6 +459,51 @@ export default function InboxPage() {
           </div>
         </div>
 
+        {/* Bulk action toolbar */}
+        {bulkMode && (
+          <div className="border-b bg-muted/30 px-3 py-2 flex items-center gap-2 flex-wrap">
+            <button onClick={toggleSelectAll} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+              {bulkSelected.size === conversations.length ? <CheckSquare className="w-3 h-3" /> : <Square className="w-3 h-3" />}
+              {bulkSelected.size === conversations.length ? "Deselect all" : "Select all"}
+            </button>
+            {bulkSelected.size > 0 && (
+              <>
+                <span className="text-xs text-muted-foreground">({bulkSelected.size})</span>
+                <button
+                  onClick={bulkClose}
+                  disabled={bulkActing}
+                  className="text-xs px-2 py-0.5 rounded border border-border hover:bg-muted transition-colors disabled:opacity-50 flex items-center gap-1"
+                >
+                  {bulkActing ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                  Close
+                </button>
+                {teamMembers.length > 0 && (
+                  <select
+                    onChange={(e) => { if (e.target.value) bulkAssign(e.target.value); e.target.value = ""; }}
+                    disabled={bulkActing}
+                    className="text-xs px-2 py-0.5 rounded border border-border bg-background cursor-pointer disabled:opacity-50"
+                    defaultValue=""
+                  >
+                    <option value="" disabled>Assign to…</option>
+                    {teamMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                )}
+                <select
+                  onChange={(e) => { if (e.target.value) bulkSetPriority(e.target.value); e.target.value = ""; }}
+                  disabled={bulkActing}
+                  className="text-xs px-2 py-0.5 rounded border border-border bg-background cursor-pointer disabled:opacity-50"
+                  defaultValue=""
+                >
+                  <option value="" disabled>Set priority…</option>
+                  <option value="normal">Normal</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center py-12">
@@ -396,35 +513,49 @@ export default function InboxPage() {
             <div className="text-center text-muted-foreground py-12 text-sm">No conversations found</div>
           ) : (
             conversations.map((conv) => (
-              <button
+              <div
                 key={conv.id}
-                onClick={() => selectConversation(conv)}
-                className={`w-full text-left p-3 border-b hover:bg-muted/50 transition-colors ${
+                className={`relative flex items-start border-b hover:bg-muted/50 transition-colors cursor-pointer ${
                   selected?.id === conv.id ? "bg-muted" : ""
-                }`}
+                } ${bulkSelected.has(conv.id) ? "bg-primary/5" : ""}`}
+                onClick={() => bulkMode ? null : selectConversation(conv)}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium truncate">{conv.customer_name || "Anonymous"}</span>
-                  {priorityMode && conv.urgency_score != null ? (
-                    <span className={`text-xs font-medium ${conv.urgency_score >= 60 ? "text-red-400" : conv.urgency_score >= 30 ? "text-orange-400" : "text-muted-foreground"}`}>
-                      {Math.round(conv.urgency_score)}
+                {bulkMode && (
+                  <button
+                    onClick={(e) => toggleBulkSelect(conv.id, e)}
+                    className="p-3 pr-2 shrink-0 text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    {bulkSelected.has(conv.id) ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}
+                  </button>
+                )}
+                <button
+                  className="flex-1 text-left p-3 pl-0 min-w-0"
+                  onClick={() => bulkMode ? toggleBulkSelect(conv.id, { stopPropagation: () => {} } as React.MouseEvent) : selectConversation(conv)}
+                  style={{ paddingLeft: bulkMode ? 0 : undefined }}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium truncate">{conv.customer_name || "Anonymous"}</span>
+                    {priorityMode && conv.urgency_score != null ? (
+                      <span className={`text-xs font-medium ${conv.urgency_score >= 60 ? "text-red-400" : conv.urgency_score >= 30 ? "text-orange-400" : "text-muted-foreground"}`}>
+                        {Math.round(conv.urgency_score)}
+                      </span>
+                    ) : (
+                      <span className={`text-xs ${SENTIMENT_COLOR[conv.sentiment] ?? "text-muted-foreground"}`}>●</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs px-1.5 py-0.5 rounded border ${STATUS_COLOR[conv.status] ?? ""}`}>
+                      {conv.status}
                     </span>
-                  ) : (
-                    <span className={`text-xs ${SENTIMENT_COLOR[conv.sentiment] ?? "text-muted-foreground"}`}>●</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs px-1.5 py-0.5 rounded border ${STATUS_COLOR[conv.status] ?? ""}`}>
-                    {conv.status}
-                  </span>
-                  <span className="text-xs text-muted-foreground">{conv.channel}</span>
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {priorityMode && conv.wait_minutes != null
-                      ? `${conv.wait_minutes}m`
-                      : new Date(conv.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                </div>
-              </button>
+                    <span className="text-xs text-muted-foreground">{conv.channel}</span>
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      {priorityMode && conv.wait_minutes != null
+                        ? `${conv.wait_minutes}m`
+                        : new Date(conv.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                </button>
+              </div>
             ))
           )}
         </div>
