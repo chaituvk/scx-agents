@@ -1,4 +1,113 @@
 // LLM abstraction supporting OpenAI, Anthropic, and local Ollama
+//
+// Set USE_MOCK_LLM=true in .env.local to get scripted responses for
+// local testing without any API keys.
+
+// ── Scripted mock (USE_MOCK_LLM=true) ──────────────────────────────
+function callMock(messages: LLMMessage[]): LLMResponse {
+  const sys = messages.find((m) => m.role === "system")?.content || "";
+  const userMsgs = messages.filter((m) => m.role === "user");
+  const lastUser = userMsgs[userMsgs.length - 1]?.content?.toLowerCase() || "";
+  const turnCount = messages.filter((m) => m.role === "assistant").length;
+
+  // Triage: respond with JSON classification
+  if (sys.includes("triage classifier") || sys.includes("sub-agent")) {
+    const isReturn = /return|refund|wrong item|exchange/i.test(lastUser);
+    const isKyc = /kyc|verify|verification|identity|account activation/i.test(lastUser);
+    const isSupport = /help|issue|problem|not working|broken|setup/i.test(lastUser);
+    const isEscalate = /human|manager|agent|representative/i.test(lastUser);
+    if (isEscalate) return { content: JSON.stringify({ intent: "escalate", subAgent: "escalation", confidence: 0.95, rationale: "explicit escalation request" }), model: "mock" };
+    if (isReturn) return { content: JSON.stringify({ intent: "workflow", subAgent: "playbook", confidence: 0.9, rationale: "return/refund intent detected" }), model: "mock" };
+    if (isKyc) return { content: JSON.stringify({ intent: "workflow", subAgent: "playbook", confidence: 0.9, rationale: "KYC intent detected" }), model: "mock" };
+    if (isSupport) return { content: JSON.stringify({ intent: "workflow", subAgent: "playbook", confidence: 0.85, rationale: "product support intent" }), model: "mock" };
+    return { content: JSON.stringify({ intent: "general_chat", subAgent: "general", confidence: 0.7, rationale: "general conversation" }), model: "mock" };
+  }
+
+  // Sentiment classification
+  if (sys.includes("Classify customer message sentiment")) {
+    const score = /thank|great|good|love|happy|yes|please/i.test(lastUser) ? "positive"
+      : /angry|terrible|awful|hate|frustrated|worst/i.test(lastUser) ? "negative" : "neutral";
+    return { content: JSON.stringify({ score, confidence: 0.75, signals: [] }), model: "mock" };
+  }
+
+  // Supervisor judge — "You are a response supervisor. Score the agent reply..."
+  if (sys.includes("response supervisor")) {
+    return { content: JSON.stringify({ grounded: true, on_topic: true, tone_ok: true, issues: [] }), model: "mock" };
+  }
+
+  // Supervisor rewrite — "You rewrite an agent reply to fix a specific supervisor-flagged issue."
+  if (sys.includes("You rewrite an agent reply")) {
+    const origMatch = lastUser.match(/ORIGINAL REPLY:\n([\s\S]+?)\n\nREWRITTEN/);
+    return { content: origMatch?.[1]?.trim() || "I'm here to help! Could you tell me more about your issue?", model: "mock" };
+  }
+
+  // Playbook ReAct loop
+  if (sys.includes("TOOL_CALL") || sys.includes("ESCALATE") || sys.includes("persona") || sys.includes("Instructions:")) {
+    // Extract persona name from system prompt
+    const nameMatch = sys.match(/You are (\w+)/);
+    const agentName = nameMatch?.[1] || "the agent";
+
+    // Simulate progressing through the playbook based on turn count and message content
+    const hasOrderNum = /\d{4,}/.test(lastUser);
+    const hasName = /my name is|i am|i'm/i.test(lastUser);
+    const hasEmail = /@/.test(lastUser);
+    const hasDob = /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}/.test(lastUser) && /born|birth|dob/i.test(lastUser);
+
+    if (sys.includes("return") || sys.includes("refund")) {
+      if (turnCount === 0) {
+        return { content: `Hi there! I'm ${agentName}, and I'm here to help with your return. I'm sorry to hear you received the wrong item — let's get that sorted right away!\n\nCould you please provide me with your **order number**?`, model: "mock" };
+      }
+      if (hasOrderNum || turnCount === 1) {
+        return { content: `Thank you! I can see your order. Since you received the wrong item, you're absolutely entitled to a full return.\n\nWould you prefer:\n1. **Full refund** to your original payment method (5–7 business days)\n2. **Store credit** (applied instantly)\n\nWhich would you like?`, model: "mock" };
+      }
+      if (/refund|original|card|payment/i.test(lastUser)) {
+        return { content: `TOOL_CALL: {"name": "create_return_label", "args": {"reason": "wrong_item", "refund_method": "original_payment"}}`, model: "mock" };
+      }
+      if (/credit|store/i.test(lastUser)) {
+        return { content: `TOOL_CALL: {"name": "create_return_label", "args": {"reason": "wrong_item", "refund_method": "store_credit"}}`, model: "mock" };
+      }
+      return { content: `Your return has been processed! You'll receive a prepaid shipping label by email within the next few minutes. Your refund will be processed once we receive the item back.\n\nYour case reference is **REF-2026-78432**. Is there anything else I can help you with?`, model: "mock" };
+    }
+
+    if (sys.includes("KYC") || sys.includes("identity") || sys.includes("verification")) {
+      if (turnCount === 0) {
+        return { content: `Welcome! I'm ${agentName}. To activate your account, I'll need to complete a quick identity verification — this usually takes just a few minutes.\n\nCould you please provide your **full legal name** as it appears on your ID?`, model: "mock" };
+      }
+      if (hasName || turnCount === 1) {
+        return { content: `Thank you! Now I'll need your **date of birth** (DD/MM/YYYY).`, model: "mock" };
+      }
+      if (hasDob || turnCount === 2) {
+        return { content: `Great. Which type of ID do you have available?\n- **Passport**\n- **Driver's licence**\n- **National ID card**`, model: "mock" };
+      }
+      if (/passport|licence|license|national|id/i.test(lastUser) || turnCount === 3) {
+        return { content: `TOOL_CALL: {"name": "generate_upload_link", "args": {"id_type": "passport"}}`, model: "mock" };
+      }
+      return { content: `Thank you for uploading your documents. I've submitted them for review.\n\nYou'll receive an email within **24 hours** with the result. Your data is encrypted and handled in full compliance with data protection regulations.\n\nIs there anything else I can help you with today?`, model: "mock" };
+    }
+
+    if (sys.includes("product") || sys.includes("support") || sys.includes("troubleshoot")) {
+      if (turnCount === 0) {
+        return { content: `Hi! I'm ${agentName}. I'd be happy to help you out.\n\nWhich product are you having issues with, and what seems to be the problem?`, model: "mock" };
+      }
+      if (turnCount === 1) {
+        return { content: `Got it, thanks for the details. A few quick things to try:\n\n1. **Restart the device** and check if the issue persists\n2. **Check for firmware/software updates** in the settings menu\n3. **Reset to factory defaults** (hold the reset button for 10 seconds)\n\nDid any of those resolve the issue?`, model: "mock" };
+      }
+      if (/no|still|not working|doesn't|doesn't/i.test(lastUser)) {
+        return { content: `I'm sorry to hear that didn't work. Since this sounds like a hardware defect and your purchase is within the 1-year warranty period, I can open a **warranty claim** for you.\n\nWould you like me to do that?`, model: "mock" };
+      }
+      if (/yes|please|sure|ok/i.test(lastUser)) {
+        return { content: `TOOL_CALL: {"name": "create_warranty_claim", "args": {"issue": "hardware_defect", "resolution": "replacement"}}`, model: "mock" };
+      }
+      return { content: `Your warranty claim has been opened — reference **WC-2026-45521**. Our team will contact you within 2 business days to arrange a replacement.\n\nIs there anything else I can help you with?`, model: "mock" };
+    }
+
+    // Generic playbook fallback
+    return { content: `I'm here to help! Could you provide a bit more detail so I can assist you better?`, model: "mock" };
+  }
+
+  // Generic fallback
+  return { content: "Hello! I'm here to help. What can I do for you today?", model: "mock" };
+}
 
 export interface LLMMessage {
   role: "system" | "user" | "assistant";
@@ -132,6 +241,8 @@ async function callOllama(messages: LLMMessage[]): Promise<LLMResponse | null> {
 }
 
 export async function chat(messages: LLMMessage[]): Promise<LLMResponse> {
+  if (process.env.USE_MOCK_LLM === "true") return callMock(messages);
+
   // Try OpenRouter first (user-provided), then Ollama (free local), then OpenAI, then Anthropic, then mock
   const providers = [callOpenRouter, callOllama, callOpenAI, callAnthropic];
 
@@ -151,6 +262,7 @@ export async function chat(messages: LLMMessage[]): Promise<LLMResponse> {
 
 export function isLLMAvailable(): boolean {
   return !!(
+    process.env.USE_MOCK_LLM === "true" ||
     process.env.OPENROUTER_API_KEY ||
     process.env.OPENAI_API_KEY ||
     process.env.ANTHROPIC_API_KEY ||

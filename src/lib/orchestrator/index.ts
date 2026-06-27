@@ -14,7 +14,7 @@ import { triageSkill } from "../skills";
 import { selectSubAgent } from "../agents/registry";
 import { supervisorAgent } from "../agents/supervisor";
 import { makeAuditEmitter } from "../audit";
-import { journeyRepo, dialogStateRepo, messageRepo } from "../repositories";
+import { journeyRepo, dialogStateRepo, messageRepo, conversationRepo } from "../repositories";
 import { loadTenantRuntime } from "../runtime/tenant-runtime";
 import { formatResponse, type Channel } from "../formatters/channel";
 import type {
@@ -142,6 +142,28 @@ export class Orchestrator {
     };
 
     await audit.emit("turn_start", { message: input.message });
+
+    // 0. Ensure the conversation row exists so message FK inserts don't fail.
+    //    Widgets/APIs may send the first message without pre-creating the row.
+    try {
+      const existing = await conversationRepo.findById(input.conversationId);
+      if (!existing) {
+        await conversationRepo.create({
+          id: input.conversationId,
+          tenant_id: input.tenantId,
+          customer_name: input.customerId ?? "Anonymous",
+          customer_email: "",
+          channel: "web",
+          status: "open",
+          sentiment: "neutral",
+          agent_id: null,
+          assigned_to: null,
+        } as Parameters<typeof conversationRepo.create>[0]);
+      }
+    } catch (err) {
+      console.error("[orchestrator] conversation auto-create failed:", err);
+      // non-fatal — FK error on message saves is better than a failed turn
+    }
 
     // 1. Load memory + session state + tenant intent map + active playbook in parallel.
     const [memCtx, session, intentMap, activePlaybookId] = await Promise.all([
