@@ -37,6 +37,7 @@ import { conversationTagsRepo } from "../repositories/conversation-tags";
 import { setTyping } from "../../app/api/conversations/[id]/typing/route";
 import { analyzeSentiment, blendSentiment } from "../sentiment/analyze";
 import { slaRepo } from "../repositories/sla";
+import { getPlaybookVariant, recordExperimentOutcome } from "../experiments/ab-router";
 
 const KNOWN_INTENTS = [
   "knowledge_query",
@@ -331,8 +332,14 @@ export class Orchestrator {
     // If an active playbook is configured for this tenant, prefer it over
     // the triage-selected sub-agent (unless triage selected escalation or a
     // forced/hint-driven route is in effect).
-    if (activePlaybookId && !input.forceSubAgent && !input.requestedJourneyId && triage.subAgent !== 'escalation') {
-      triage = { ...triage, subAgent: 'playbook', playbookId: activePlaybookId };
+    // A/B experiment overrides the active playbook when an active experiment exists.
+    if (!input.forceSubAgent && !input.requestedJourneyId && triage.subAgent !== 'escalation') {
+      const abPlaybookId = await getPlaybookVariant(input.tenantId, input.conversationId).catch(() => null);
+      if (abPlaybookId) {
+        triage = { ...triage, subAgent: 'playbook', playbookId: abPlaybookId };
+      } else if (activePlaybookId) {
+        triage = { ...triage, subAgent: 'playbook', playbookId: activePlaybookId };
+      }
     }
 
     // Routing rules — evaluate after triage and playbook assignment so rules
@@ -548,6 +555,10 @@ export class Orchestrator {
           variables: subOut.variables,
         },
       }).catch(() => {});
+      recordExperimentOutcome(input.tenantId, input.conversationId, "completed").catch(() => {});
+    }
+    if (subName === "escalation") {
+      recordExperimentOutcome(input.tenantId, input.conversationId, "escalated").catch(() => {});
     }
 
     // 8. Playbook pendingAction → persist as pending_approval so the approval

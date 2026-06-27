@@ -492,6 +492,8 @@ function initPgSchema() {
       experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
       conversation_id TEXT NOT NULL,
       variant_id TEXT NOT NULL,
+      outcome TEXT,
+      outcome_at TIMESTAMPTZ,
       assigned_at TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(experiment_id, conversation_id)
     );
@@ -1133,7 +1135,8 @@ function initSqliteSchema() {
     );
     CREATE TABLE IF NOT EXISTS experiment_assignments (
       id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
-      variant_id TEXT NOT NULL, assigned_at TEXT DEFAULT (datetime('now')),
+      variant_id TEXT NOT NULL, outcome TEXT, outcome_at TEXT,
+      assigned_at TEXT DEFAULT (datetime('now')),
       UNIQUE(experiment_id, conversation_id)
     );
 
