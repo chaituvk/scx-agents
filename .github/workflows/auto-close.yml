@@ -1,0 +1,26 @@
+name: Auto-close Stale Conversations
+
+on:
+  schedule:
+    # Every 30 minutes
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      inactivity_minutes:
+        description: "Minutes of inactivity before closing"
+        required: false
+        default: "30"
+
+jobs:
+  auto-close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close stale conversations
+        run: |
+          MINUTES="${{ inputs.inactivity_minutes || '30' }}"
+          curl -fsSL \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.DIGEST_API_KEY }}" \
+            -d "{\"inactivity_minutes\": $MINUTES}" \
+            "${{ secrets.APP_BASE_URL }}/api/conversations/auto-close"

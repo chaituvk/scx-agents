@@ -1,0 +1,54 @@
+name: Daily/Weekly Digest
+
+on:
+  schedule:
+    # Daily at 07:00 UTC
+    - cron: "0 7 * * *"
+    # Weekly on Monday at 07:00 UTC
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "Digest period"
+        required: false
+        default: "daily"
+        type: choice
+        options:
+          - daily
+          - weekly
+      recipients:
+        description: "Comma-separated recipient emails (optional override)"
+        required: false
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine period
+        id: period
+        run: |
+          # workflow_dispatch override
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "period=${{ inputs.period }}" >> "$GITHUB_OUTPUT"
+          # Monday cron → weekly
+          elif [ "$(date +%u)" = "1" ]; then
+            echo "period=weekly" >> "$GITHUB_OUTPUT"
+          else
+            echo "period=daily" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send digest
+        run: |
+          RECIPIENTS_JSON="[]"
+          if [ -n "${{ inputs.recipients }}" ]; then
+            RECIPIENTS_JSON=$(echo '${{ inputs.recipients }}' | python3 -c "import sys,json; emails=[e.strip() for e in sys.stdin.read().split(',') if e.strip()]; print(json.dumps(emails))")
+          elif [ -n "${{ secrets.DIGEST_RECIPIENTS }}" ]; then
+            RECIPIENTS_JSON=$(echo '${{ secrets.DIGEST_RECIPIENTS }}' | python3 -c "import sys,json; emails=[e.strip() for e in sys.stdin.read().split(',') if e.strip()]; print(json.dumps(emails))")
+          fi
+
+          curl -fsSL \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.DIGEST_API_KEY }}" \
+            -d "{\"period\": \"${{ steps.period.outputs.period }}\", \"recipients\": $RECIPIENTS_JSON}" \
+            "${{ secrets.APP_BASE_URL }}/api/reports/digest"

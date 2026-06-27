@@ -19,7 +19,10 @@ import {
   Upload,
   CheckCircle,
   XCircle,
+  Sparkles,
+  Edit3,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -88,6 +91,9 @@ export default function KnowledgePage() {
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [suggestingId, setSuggestingId] = useState<string | null>(null);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [editingGap, setEditingGap] = useState<{ id: string; content: string } | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -161,6 +167,41 @@ export default function KnowledgePage() {
       setSyncingId(null);
     }
   };
+
+  async function handleSuggest(gapId: string) {
+    setSuggestingId(gapId);
+    try {
+      const res = await fetch(`/api/knowledge/gaps/${gapId}/suggest`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.suggested_answer) {
+        setKnowledgeGaps((prev) =>
+          prev.map((g) => g.id === gapId ? { ...g, suggestedAnswer: data.suggested_answer } : g)
+        );
+        setEditingGap({ id: gapId, content: data.suggested_answer });
+      }
+    } catch { /* ignore */ }
+    finally { setSuggestingId(null); }
+  }
+
+  async function handlePublish(gapId: string) {
+    const content = editingGap?.id === gapId ? editingGap.content : knowledgeGaps.find((g) => g.id === gapId)?.suggestedAnswer;
+    if (!content) return;
+    setPublishingId(gapId);
+    try {
+      const res = await fetch(`/api/knowledge/gaps/${gapId}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      if (res.ok) {
+        setKnowledgeGaps((prev) =>
+          prev.map((g) => g.id === gapId ? { ...g, status: "resolved" as const } : g)
+        );
+        setEditingGap(null);
+      }
+    } catch { /* ignore */ }
+    finally { setPublishingId(null); }
+  }
 
   const openGaps = knowledgeGaps.filter((g) => g.status === "open");
 
@@ -432,40 +473,109 @@ export default function KnowledgePage() {
             {/* Gaps Tab */}
             <TabsContent value="gaps" className="mt-6">
               <div className="grid gap-4">
-                {knowledgeGaps.map((gap) => (
+                {knowledgeGaps.length === 0 && (
+                  <div className="text-center py-16 text-muted-foreground text-sm">
+                    <CheckCircle className="w-10 h-10 mx-auto mb-3 text-green-500 opacity-40" />
+                    No knowledge gaps — your AI is answering everything!
+                  </div>
+                )}
+                {knowledgeGaps.map((gap) => {
+                  const isEditing = editingGap?.id === gap.id;
+                  return (
                   <motion.div
                     key={gap.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                   >
-                    <Card className={`bg-[#141414] border-white/5 ${gap.status === "open" ? "border-yellow-500/20" : "border-green-500/20"}`}>
+                    <Card className={`bg-[#141414] ${gap.status === "open" ? "border-yellow-500/20" : "border-green-500/20"}`}>
                       <CardContent className="p-5">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
+                        <div className="flex items-start gap-4">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-2">
                               <Badge className={gap.status === "open" ? "bg-yellow-500/20 text-yellow-400" : "bg-green-500/20 text-green-400"}>
                                 {gap.status === "open" ? "Open" : "Resolved"}
                               </Badge>
-                              <span className="text-xs text-muted-foreground">Asked {gap.frequency}x this week</span>
+                              <span className="text-xs text-muted-foreground">Asked {gap.frequency}x</span>
                             </div>
-                            <div className="font-medium mb-1">{gap.question}</div>
-                            {gap.suggestedAnswer && (
-                              <div className="text-sm text-muted-foreground bg-[#0a0a0a] p-3 rounded-lg border border-white/5 mt-2">
-                                <span className="text-[#c4a574] font-medium">Suggested answer:</span> {gap.suggestedAnswer}
+                            <p className="font-medium mb-3">{gap.question}</p>
+
+                            {/* Suggested answer — editable when in edit mode */}
+                            {isEditing ? (
+                              <Textarea
+                                value={editingGap.content}
+                                onChange={(e) => setEditingGap({ id: gap.id, content: e.target.value })}
+                                rows={4}
+                                className="text-sm bg-[#0a0a0a] border-[#c4a574]/30 resize-none mb-2"
+                              />
+                            ) : gap.suggestedAnswer ? (
+                              <div className="text-sm bg-[#0a0a0a] p-3 rounded-lg border border-white/5 mt-1 group relative">
+                                <div className="text-[10px] text-[#c4a574] font-medium mb-1 flex items-center gap-1">
+                                  <Sparkles className="w-3 h-3" /> AI Suggested Answer
+                                </div>
+                                {gap.suggestedAnswer}
+                                <button
+                                  onClick={() => setEditingGap({ id: gap.id, content: gap.suggestedAnswer! })}
+                                  className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
                               </div>
-                            )}
+                            ) : null}
                           </div>
+
                           {gap.status === "open" && (
-                            <Button size="sm" className="bg-[#c4a574] text-[#0a0a0a] hover:bg-[#d4c4b0] ml-4 shrink-0">
-                              <Plus className="h-3.5 w-3.5 mr-1.5" />
-                              Add to KB
-                            </Button>
+                            <div className="flex flex-col gap-2 shrink-0">
+                              {!gap.suggestedAnswer && !isEditing && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-[#c4a574]/30 text-[#c4a574] hover:bg-[#c4a574]/10 whitespace-nowrap"
+                                  disabled={suggestingId === gap.id}
+                                  onClick={() => handleSuggest(gap.id)}
+                                >
+                                  {suggestingId === gap.id
+                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                                    : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+                                  AI Suggest
+                                </Button>
+                              )}
+                              {(gap.suggestedAnswer || isEditing) && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    className="bg-[#c4a574] text-[#0a0a0a] hover:bg-[#d4c4b0] whitespace-nowrap"
+                                    disabled={publishingId === gap.id}
+                                    onClick={() => handlePublish(gap.id)}
+                                  >
+                                    {publishingId === gap.id
+                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                                      : <Plus className="h-3.5 w-3.5 mr-1.5" />}
+                                    Publish to KB
+                                  </Button>
+                                  {!isEditing && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-muted-foreground text-xs"
+                                      disabled={suggestingId === gap.id}
+                                      onClick={() => handleSuggest(gap.id)}
+                                    >
+                                      {suggestingId === gap.id
+                                        ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                                        : <RefreshCw className="h-3 w-3 mr-1" />}
+                                      Re-suggest
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+                            </div>
                           )}
                         </div>
                       </CardContent>
                     </Card>
                   </motion.div>
-                ))}
+                  );
+                })}
               </div>
             </TabsContent>
 

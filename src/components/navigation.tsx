@@ -33,6 +33,7 @@ import {
   UserCircle,
   AlertCircle,
   TrendingUp,
+  Plug,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -46,6 +47,7 @@ const products = [
   { name: "Ghostwriter", href: "/studio/ghostwriter", icon: Sparkles, desc: "AI agent builder" },
   { name: "Trust", href: "/trust", icon: Shield, desc: "Security & compliance" },
   { name: "Omnichannel", href: "/omnichannel", icon: MessageSquare, desc: "All channels" },
+  { name: "Integrations", href: "/integrations", icon: Plug, desc: "Connect your stack" },
 ];
 
 const studioTools = [
@@ -65,6 +67,7 @@ const accountTools = [
   { name: "Inbox", href: "/inbox", icon: Inbox },
   { name: "Handover", href: "/handover", icon: AlertCircle },
   { name: "Analytics", href: "/analytics", icon: TrendingUp },
+  { name: "Integrations", href: "/integrations", icon: Plug },
   { name: "Campaigns", href: "/campaigns", icon: Megaphone },
   { name: "Customers", href: "/customers", icon: UserCircle },
   { name: "Settings", href: "/settings", icon: Settings },
