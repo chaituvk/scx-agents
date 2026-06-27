@@ -87,6 +87,7 @@ export default function InboxPage() {
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkActing, setBulkActing] = useState(false);
+  const [draftLoading, setDraftLoading] = useState(false);
   const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
   const [customerProfile, setCustomerProfile] = useState<Record<string, unknown> | null>(null);
   const [customerConvs, setCustomerConvs] = useState<Conversation[]>([]);
@@ -398,6 +399,19 @@ export default function InboxPage() {
     setBulkMode(false);
     fetchConversations();
     setBulkActing(false);
+  }
+
+  async function generateDraft() {
+    if (!selected) return;
+    setDraftLoading(true);
+    try {
+      const res = await fetch(`/api/conversations/${selected.id}/draft`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.draft) setReply(data.draft);
+      }
+    } catch { /* non-fatal */ }
+    finally { setDraftLoading(false); }
   }
 
   function downloadTranscript(format: "html" | "text") {
@@ -796,19 +810,35 @@ export default function InboxPage() {
 
           {/* Reply bar / Note input */}
           {activeTab === "messages" && selected.status === "open" && (
-            <div className="border-t p-3 flex gap-2 shrink-0">
-              <Textarea
-                className="min-h-[60px] text-sm resize-none"
-                placeholder="Type a message… (AI will respond)"
-                value={reply}
-                onChange={(e) => setReply(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); }
-                }}
-              />
-              <Button onClick={sendReply} disabled={!reply.trim() || sending} className="self-end">
-                {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              </Button>
+            <div className="border-t p-3 space-y-2 shrink-0">
+              <div className="flex gap-2">
+                <Textarea
+                  className="min-h-[60px] text-sm resize-none"
+                  placeholder="Type a message…"
+                  value={reply}
+                  onChange={(e) => setReply(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); }
+                  }}
+                />
+                <div className="flex flex-col gap-1 self-end">
+                  <Button onClick={sendReply} disabled={!reply.trim() || sending}>
+                    {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={generateDraft}
+                    disabled={draftLoading}
+                    title="AI Draft Reply"
+                    className="border-primary/20 text-primary hover:bg-primary/10"
+                  >
+                    {draftLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                  </Button>
+                </div>
+              </div>
+              {!reply && (
+                <p className="text-[10px] text-muted-foreground">Press ✨ to generate an AI draft reply</p>
+              )}
             </div>
           )}
           {activeTab === "notes" && (
