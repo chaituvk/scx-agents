@@ -35,22 +35,22 @@ try {
     initPgSchema();
     seedDatabase();
   }).catch((err) => {
-    console.log("[db] PostgreSQL unavailable, using SQLite fallback:", err.message);
+    console.log("[db] PostgreSQL unavailable, using SQLite:", err.message);
     pgPool = null;
     usePostgres = false;
-    initSqlite();
+    // SQLite already initialized eagerly; nothing to do here.
   });
 } catch {
-  console.log("[db] PostgreSQL not configured, using SQLite fallback");
+  console.log("[db] PostgreSQL not configured, using SQLite");
   pgPool = null;
   usePostgres = false;
-  initSqlite();
 }
 
 // ── SQLite (fallback) ───────────────────────────────────────────────
 let sqliteDb: Database.Database | null = null;
 
 function initSqlite() {
+  if (sqliteDb) return;
   const DB_DIR = path.join(process.cwd(), "data");
   const DB_PATH = path.join(DB_DIR, "sierra.db");
   if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
@@ -61,10 +61,23 @@ function initSqlite() {
   seedDatabase();
 }
 
+// Initialize SQLite eagerly so the first request never races the async PG probe.
+initSqlite();
+
 // ── Unified Query Interface ─────────────────────────────────────────
 export interface QueryResult {
   rows: any[];
   rowCount?: number;
+}
+
+// Convert positional params [v1, v2] → {$1: v1, $2: v2} for SQLite.
+// All SQL in this codebase uses $1/$2 placeholders (PG style).
+// better-sqlite3 supports $name named params when passed as a single object.
+function toSqliteParams(params: any[]): Record<string, any> {
+  const named: Record<string, any> = {};
+  // better-sqlite3 strips the sigil: $1 in SQL binds to key "1" in the object.
+  params.forEach((v, i) => { named[String(i + 1)] = v; });
+  return named;
 }
 
 export async function query(sql: string, params: any[] = []): Promise<QueryResult> {
@@ -74,11 +87,12 @@ export async function query(sql: string, params: any[] = []): Promise<QueryResul
   }
   if (sqliteDb) {
     const stmt = sqliteDb.prepare(sql);
+    const bound = params.length > 0 ? toSqliteParams(params) : {};
     if (sql.trim().toLowerCase().startsWith("select")) {
-      const rows = stmt.all(...params) as any[];
+      const rows = (params.length > 0 ? stmt.all(bound) : stmt.all()) as any[];
       return { rows, rowCount: rows.length };
     } else {
-      const result = stmt.run(...params);
+      const result = params.length > 0 ? stmt.run(bound) : stmt.run();
       return { rows: [], rowCount: result.changes };
     }
   }
@@ -106,7 +120,8 @@ export async function run(sql: string, params: any[] = []): Promise<{ changes: n
   }
   if (sqliteDb) {
     const stmt = sqliteDb.prepare(sql);
-    const result = stmt.run(...params);
+    const bound = params.length > 0 ? toSqliteParams(params) : {};
+    const result = params.length > 0 ? stmt.run(bound) : stmt.run();
     return { changes: result.changes, lastID: String(result.lastInsertRowid) };
   }
   throw new Error("No database available");

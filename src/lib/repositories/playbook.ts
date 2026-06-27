@@ -38,7 +38,9 @@ class PlaybookRepo extends Repository<Playbook> {
     return playbook;
   }
 
-  async findAll(tenantId: string): Promise<Playbook[]> {
+  async findAll(tenantId?: string): Promise<Playbook[]> {
+    if (!tenantId) return [];
+
     const cacheKey = this.listCacheKey(`tenant:${tenantId}`);
     const cached = await this.cache.get<Playbook[]>(cacheKey);
     if (cached) return cached;

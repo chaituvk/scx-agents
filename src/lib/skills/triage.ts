@@ -100,11 +100,12 @@ export const triageSkill: Skill<TriageInput, TriageOutput> = {
   async run(input: TriageInput, _ctx: SkillContext): Promise<TriageOutput> {
     const sys = `You are a triage classifier. Classify the user's message into an intent and route it to a sub-agent.
 Allowed sub-agents:
-- "rag" — substantive questions answerable from a knowledge base (policies, product details, how-to). Pick this only when retrieval would help.
-- "workflow" — multi-step processes (returns, refunds, KYC, cancellations).
-- "tool" — single lookups (order status, balance, tracking).
-- "escalation" — explicit request for a human / manager / live agent.
-- "general" — greetings, thanks, small talk, acknowledgments, off-topic chatter, vague clarifying messages, or anything that doesn't fit the four above.
+- "playbook" — use this when an active playbook is configured; it handles all intents the playbook covers via natural language instructions.
+- "rag" — substantive questions answerable from a knowledge base (policies, product details, how-to). Pick this only when retrieval would help and no playbook is active.
+- "workflow" — multi-step processes (returns, refunds, KYC, cancellations). Use only when no playbook is active.
+- "tool" — single lookups (order status, balance, tracking). Use only when no playbook is active.
+- "escalation" — explicit request for a human / manager / live agent. Always valid even when a playbook is active.
+- "general" — greetings, thanks, small talk, acknowledgments, off-topic chatter, vague clarifying messages, or anything that doesn't fit the above.
 Known intents: ${input.knownIntents.join(", ") || "(none)"}.${sessionContextLines(input.session)}${intentMapLines(input.intentMap)}
 Return JSON with keys: intent, journeyId (optional), specialistId (optional), subAgent, confidence (0..1), rationale.`;
     const user = `Message: ${input.message}`;
