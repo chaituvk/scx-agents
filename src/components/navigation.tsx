@@ -31,6 +31,8 @@ import {
   Settings,
   Megaphone,
   UserCircle,
+  AlertCircle,
+  TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -61,6 +63,8 @@ const studioTools = [
 
 const accountTools = [
   { name: "Inbox", href: "/inbox", icon: Inbox },
+  { name: "Handover", href: "/handover", icon: AlertCircle },
+  { name: "Analytics", href: "/analytics", icon: TrendingUp },
   { name: "Campaigns", href: "/campaigns", icon: Megaphone },
   { name: "Customers", href: "/customers", icon: UserCircle },
   { name: "Settings", href: "/settings", icon: Settings },
