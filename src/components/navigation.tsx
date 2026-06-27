@@ -36,6 +36,7 @@ import {
   Plug,
   Zap,
   GitBranch,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -75,6 +76,8 @@ const accountTools = [
   { name: "Integrations", href: "/integrations", icon: Plug },
   { name: "Campaigns", href: "/campaigns", icon: Megaphone },
   { name: "Customers", href: "/customers", icon: UserCircle },
+  { name: "Team", href: "/settings/team", icon: Users },
+  { name: "SLA", href: "/settings/sla", icon: Clock },
   { name: "Settings", href: "/settings", icon: Settings },
   { name: "API Keys", href: "/settings/api-keys", icon: Key },
 ];
