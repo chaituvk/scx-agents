@@ -3,6 +3,7 @@ import { query, getOne } from "@/lib/db";
 import { getTenantFromRequest } from "@/lib/tenant";
 import { insightRepo } from "@/lib/repositories/insight";
 import { csatRepo } from "@/lib/repositories/csat";
+import { tokenUsageRepo } from "@/lib/repositories/token-usage";
 
 export async function GET(req: NextRequest) {
   const tenantId = await getTenantFromRequest(req);
@@ -55,6 +56,8 @@ export async function GET(req: NextRequest) {
     ? csatSummary.average_score
     : csat;
 
+  const tokenSummary = await tokenUsageRepo.summary(tenantId, 30).catch(() => null);
+
   const kpis = {
     totalConversations,
     resolutionRate,
@@ -62,7 +65,10 @@ export async function GET(req: NextRequest) {
     csat: realCsat,
     csatRatings: csatSummary?.total_ratings ?? 0,
     csatDistribution: csatSummary?.distribution ?? null,
+    totalTokens: tokenSummary?.total_tokens ?? 0,
+    totalCostUsd: tokenSummary?.total_cost_usd ?? 0,
+    tokensByModel: tokenSummary?.by_model ?? {},
   };
 
-  return NextResponse.json({ kpis, trends: trendsResult.rows, flagged: flaggedResult.rows });
+  return NextResponse.json({ kpis, trends: trendsResult.rows, flagged: flaggedResult.rows, tokenUsage: tokenSummary });
 }

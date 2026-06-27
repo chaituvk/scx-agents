@@ -30,6 +30,7 @@ import type {
   MemoryContext,
 } from "../agents/types";
 import { dispatchWebhookEvent } from "../webhooks/delivery";
+import { customerProfileRepo } from "../repositories/customer-profile";
 
 const KNOWN_INTENTS = [
   "knowledge_query",
@@ -171,6 +172,22 @@ export class Orchestrator {
       // non-fatal — FK error on message saves is better than a failed turn
     }
 
+    // 0b. Customer profile — look up or create a profile so memories and
+    //     personalisation context flow into sub-agents. Non-blocking on error.
+    let customerProfile: Awaited<ReturnType<typeof customerProfileRepo.upsertByContact>> | null = null;
+    if (input.customerId) {
+      try {
+        customerProfile = await customerProfileRepo.upsertByContact(input.tenantId, {
+          phone: input.customerId.startsWith("+") ? input.customerId : undefined,
+          email: input.customerId.includes("@") ? input.customerId : undefined,
+          channel: input.channel,
+        });
+        await customerProfileRepo.incrementConversationCount(customerProfile.id);
+      } catch {
+        /* non-blocking */
+      }
+    }
+
     // 1. Load memory + session state + tenant intent map + active playbook in parallel.
     const [memCtx, session, intentMap, activePlaybookId] = await Promise.all([
       memoryService.load({
@@ -182,6 +199,16 @@ export class Orchestrator {
       loadIntentMap(input.tenantId),
       loadActivePlaybook(input.tenantId),
     ]);
+
+    // 1b-pre. Attach customer profile to memory context so sub-agents can
+    //         access it for personalisation without an extra lookup.
+    if (customerProfile) {
+      memCtx.profile = {
+        id: customerProfile.id,
+        name: customerProfile.name,
+        email: customerProfile.email,
+      };
+    }
 
     // 1b. Pending-approval gate (Stage 7). When a prior turn paused on a
     // policy_check, the conversation is suspended until POST

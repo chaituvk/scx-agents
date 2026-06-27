@@ -280,7 +280,17 @@ function inferTier(messages: LLMMessage[]): ModelTier {
   return "balanced";
 }
 
-export async function chat(messages: LLMMessage[], tier?: ModelTier): Promise<LLMResponse> {
+export interface ChatContext {
+  tenantId?: string;
+  conversationId?: string;
+  agentType?: string;
+}
+
+export async function chat(
+  messages: LLMMessage[],
+  tier?: ModelTier,
+  ctx?: ChatContext
+): Promise<LLMResponse> {
   if (process.env.USE_MOCK_LLM === "true") return callMock(messages);
 
   const resolvedTier = tier ?? inferTier(messages);
@@ -294,7 +304,22 @@ export async function chat(messages: LLMMessage[], tier?: ModelTier): Promise<LL
 
   for (const provider of providers) {
     const result = await provider(messages, resolvedTier);
-    if (result) return result;
+    if (result) {
+      // Track usage asynchronously — never blocks the response
+      if (ctx?.tenantId && result.usage) {
+        import("./repositories/token-usage").then(({ tokenUsageRepo }) => {
+          tokenUsageRepo.record({
+            tenantId: ctx.tenantId!,
+            conversationId: ctx.conversationId,
+            model: result.model,
+            promptTokens: result.usage!.promptTokens,
+            completionTokens: result.usage!.completionTokens,
+            agentType: ctx.agentType,
+          }).catch(() => {});
+        }).catch(() => {});
+      }
+      return result;
+    }
   }
 
   // Fallback: return a structured mock so the UI still works

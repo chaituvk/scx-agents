@@ -1,4 +1,4 @@
-import { query, run, getOne } from "../db";
+import { query, run, getOne, isPostgres } from "../db";
 import { randomUUID } from "crypto";
 
 export interface CustomerProfile {
@@ -228,26 +228,26 @@ export const customerProfileRepo = {
     limit = 20,
   ): Promise<CustomerProfile[]> {
     const like = `%${searchQuery}%`;
-    const res = await query(
-      `SELECT * FROM customer_profiles
-       WHERE tenant_id = $1
-         AND (name ILIKE $2 OR email ILIKE $3 OR phone ILIKE $4)
-       ORDER BY last_seen_at DESC NULLS LAST
-       LIMIT $5`,
-      [tenantId, like, like, like, limit],
-    );
-    // SQLite doesn't support ILIKE — fall back with LIKE if no results from PG path
-    if (res.rows.length === 0 && searchQuery) {
-      const fallback = await query(
+    if (isPostgres()) {
+      const res = await query(
         `SELECT * FROM customer_profiles
          WHERE tenant_id = $1
-           AND (name LIKE $2 OR email LIKE $3 OR phone LIKE $4)
-         ORDER BY last_seen_at DESC
+           AND (name ILIKE $2 OR email ILIKE $3 OR phone ILIKE $4)
+         ORDER BY last_seen_at DESC NULLS LAST
          LIMIT $5`,
         [tenantId, like, like, like, limit],
       );
-      return fallback.rows.map(parseProfile);
+      return res.rows.map(parseProfile);
     }
+    // SQLite: use LIKE (case-insensitive for ASCII by default)
+    const res = await query(
+      `SELECT * FROM customer_profiles
+       WHERE tenant_id = $1
+         AND (name LIKE $2 OR email LIKE $3 OR phone LIKE $4)
+       ORDER BY last_seen_at DESC
+       LIMIT $5`,
+      [tenantId, like, like, like, limit],
+    );
     return res.rows.map(parseProfile);
   },
 
