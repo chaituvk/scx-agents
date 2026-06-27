@@ -34,6 +34,8 @@ import {
   AlertCircle,
   TrendingUp,
   Plug,
+  Zap,
+  GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -60,6 +62,8 @@ const studioTools = [
   { name: "Playbooks", href: "/studio/playbooks", icon: ScrollText },
   { name: "Testing", href: "/studio/testing", icon: Beaker },
   { name: "Experiments", href: "/studio/experiments", icon: FlaskConical },
+  { name: "Proactive", href: "/studio/proactive", icon: Zap },
+  { name: "Routing", href: "/studio/routing", icon: GitBranch },
   { name: "Webhooks", href: "/studio/webhooks", icon: Webhook },
   { name: "Profiles", href: "/studio/profiles", icon: Settings },
 ];
