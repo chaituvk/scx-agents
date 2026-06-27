@@ -6,7 +6,7 @@ import {
   MessageSquare, Search, Filter, ChevronRight, User, Bot, Clock,
   CheckCircle, AlertCircle, X, Send, Loader2, Star, UserPlus,
   Sparkles, Zap, ChevronDown, Download, FileText, StickyNote, Flame,
-  Square, CheckSquare, Users,
+  Square, CheckSquare, Users, Brain, History, UserCircle, ChevronLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,6 +87,11 @@ export default function InboxPage() {
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkActing, setBulkActing] = useState(false);
+  const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
+  const [customerProfile, setCustomerProfile] = useState<Record<string, unknown> | null>(null);
+  const [customerConvs, setCustomerConvs] = useState<Conversation[]>([]);
+  const [customerMemories, setCustomerMemories] = useState<{id: string; memory_type: string; content: string; importance: number; created_at: string}[]>([]);
+  const [customerLoading, setCustomerLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -296,6 +301,31 @@ export default function InboxPage() {
       body: JSON.stringify({ tags: [tag] }),
     });
     setConvTags(prev => prev.filter(t => t !== tag));
+  }
+
+  async function openCustomerPanel() {
+    if (!selected) return;
+    setCustomerPanelOpen(true);
+    setCustomerLoading(true);
+    setCustomerProfile(null);
+    setCustomerConvs([]);
+    setCustomerMemories([]);
+    try {
+      const email = selected.customer_email;
+      const [custRes, convsRes] = await Promise.all([
+        email ? fetch(`/api/customers?q=${encodeURIComponent(email)}&limit=1`).then(r => r.json()) : null,
+        fetch(`/api/conversations/search?q=${encodeURIComponent(selected.customer_email || selected.customer_name || "")}&limit=10`).then(r => r.json()),
+      ]);
+      const profile = custRes?.customers?.[0] ?? null;
+      setCustomerProfile(profile);
+      setCustomerConvs((convsRes?.conversations ?? []).filter((c: Conversation) => c.id !== selected.id));
+      if (profile?.id) {
+        const memRes = await fetch(`/api/customers/${profile.id}/memories`).then(r => r.json()).catch(() => ({}));
+        setCustomerMemories(memRes.memories ?? []);
+      }
+    } finally {
+      setCustomerLoading(false);
+    }
   }
 
   async function updatePriority(priority: string) {
@@ -563,13 +593,22 @@ export default function InboxPage() {
 
       {/* Main — conversation detail */}
       {selected ? (
-        <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Header */}
           <div className="p-4 border-b flex items-center justify-between shrink-0">
-            <div>
-              <h2 className="font-semibold">{selected.customer_name || "Anonymous"}</h2>
-              <p className="text-xs text-muted-foreground">{selected.customer_email} · {selected.channel}</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={openCustomerPanel}
+                title="View customer profile"
+                className="w-8 h-8 rounded-full bg-muted flex items-center justify-center hover:bg-muted/80 transition-colors shrink-0"
+              >
+                <User className="w-4 h-4 text-muted-foreground" />
+              </button>
+              <div>
+                <h2 className="font-semibold">{selected.customer_name || "Anonymous"}</h2>
+                <p className="text-xs text-muted-foreground">{selected.customer_email} · {selected.channel}</p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <Badge variant="outline" className={STATUS_COLOR[selected.status] ?? ""}>
@@ -794,6 +833,124 @@ export default function InboxPage() {
             </div>
           )}
         </div>
+
+        {/* Customer context panel */}
+        <AnimatePresence>
+          {customerPanelOpen && (
+            <motion.div
+              initial={{ x: "100%", opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: "100%", opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="absolute right-0 top-0 bottom-0 w-80 bg-background border-l z-20 flex flex-col shadow-2xl"
+            >
+              <div className="p-4 border-b flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <UserCircle className="w-4 h-4 text-primary" />
+                  <span className="font-medium text-sm">Customer Profile</span>
+                </div>
+                <button onClick={() => setCustomerPanelOpen(false)} className="text-muted-foreground hover:text-foreground">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                {customerLoading ? (
+                  <div className="flex justify-center py-12">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <>
+                    {/* Profile card */}
+                    <div className="rounded-lg border p-4 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                          <User className="w-5 h-5 text-primary" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm truncate">{(customerProfile?.name as string) || selected.customer_name || "Anonymous"}</p>
+                          <p className="text-xs text-muted-foreground truncate">{(customerProfile?.email as string) || selected.customer_email}</p>
+                        </div>
+                      </div>
+                      {customerProfile && (
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {(customerProfile.phone as string) && (
+                            <div><p className="text-muted-foreground">Phone</p><p className="font-medium">{customerProfile.phone as string}</p></div>
+                          )}
+                          {(customerProfile.channel as string) && (
+                            <div><p className="text-muted-foreground">Channel</p><p className="font-medium capitalize">{customerProfile.channel as string}</p></div>
+                          )}
+                          {(customerProfile.language as string) && (
+                            <div><p className="text-muted-foreground">Language</p><p className="font-medium uppercase">{customerProfile.language as string}</p></div>
+                          )}
+                          <div><p className="text-muted-foreground">Conversations</p><p className="font-medium">{(customerProfile.total_conversations as number) ?? 0}</p></div>
+                          {(customerProfile.last_seen_at as string) && (
+                            <div className="col-span-2"><p className="text-muted-foreground">Last seen</p><p className="font-medium">{new Date(customerProfile.last_seen_at as string).toLocaleDateString()}</p></div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* AI Memories */}
+                    {customerMemories.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-3">
+                          <Brain className="w-3.5 h-3.5 text-primary" />
+                          <p className="text-xs font-medium">AI Memories ({customerMemories.length})</p>
+                        </div>
+                        <div className="space-y-2">
+                          {customerMemories.slice(0, 5).map((m) => (
+                            <div key={m.id} className="text-xs p-2.5 rounded-lg bg-muted/50 border">
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-primary/10 text-primary capitalize">
+                                  {m.memory_type.replace(/_/g, " ")}
+                                </span>
+                                <span className="text-muted-foreground ml-auto">★{m.importance}/10</span>
+                              </div>
+                              <p className="text-foreground leading-relaxed">{m.content}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Previous conversations */}
+                    {customerConvs.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-3">
+                          <History className="w-3.5 h-3.5 text-muted-foreground" />
+                          <p className="text-xs font-medium">Previous Conversations ({customerConvs.length})</p>
+                        </div>
+                        <div className="space-y-2">
+                          {customerConvs.slice(0, 5).map((c) => (
+                            <div key={c.id} className="text-xs p-2.5 rounded-lg border hover:bg-muted/50 transition-colors">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`px-1.5 py-0.5 rounded border text-[10px] ${STATUS_COLOR[c.status] ?? ""}`}>{c.status}</span>
+                                <span className="text-muted-foreground">{c.channel}</span>
+                                <span className="text-muted-foreground ml-auto">{new Date(c.updated_at).toLocaleDateString()}</span>
+                              </div>
+                              {c.priority !== "normal" && (
+                                <span className={`text-[10px] ${c.priority === "urgent" ? "text-red-500" : "text-orange-500"}`}>
+                                  {c.priority} priority
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {!customerProfile && customerConvs.length === 0 && customerMemories.length === 0 && (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <UserCircle className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                        <p className="text-sm">No profile data found</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Copilot panel */}
         <div className="w-64 border-l flex flex-col shrink-0 bg-[#0a0a0a]">
