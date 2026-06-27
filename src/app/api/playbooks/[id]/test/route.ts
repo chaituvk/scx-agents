@@ -15,6 +15,7 @@ import { playbookRepo } from "@/lib/repositories";
 import { getTenantFromRequest } from "@/lib/tenant";
 import { runPlaybook } from "@/lib/playbook/runner";
 import { retrieveKnowledge } from "@/lib/rag";
+import { loadTenantToolAdapters } from "@/lib/tools/integration-loader";
 
 export const runtime = "nodejs";
 
@@ -49,6 +50,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const history = messages.slice(0, -1);
   const userMessage = lastMessage.content;
+
+  // Wire real integration adapters for this tenant (no-op if none connected)
+  await loadTenantToolAdapters(tenantId);
 
   // Use provided knowledge or fetch from RAG
   let knowledge = body.knowledge ?? [];

@@ -9,7 +9,8 @@ import {
   Package, Truck, Tag, BookOpen, Users, Brain, Lock,
   Terminal, Eye, EyeOff, ArrowUp, ArrowDown,
   AlertTriangle, Check, Cpu, Ban, MessageSquare,
-  Activity, RotateCcw, Copy, Info,
+  Activity, RotateCcw, Copy, Info, GitBranch, Wrench,
+  Keyboard, ChevronRight, Radio,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -65,6 +66,44 @@ interface TestMessage {
   thinking?: string[];
   turn?: number;
 }
+
+// ─── Structured step types ────────────────────────────────────────────────
+
+type StepType = "message" | "condition" | "tool_call" | "input_collect";
+
+interface StepMeta {
+  type: StepType;
+  // condition fields
+  condition?: string;
+  trueBranch?: string;
+  falseBranch?: string;
+  // tool_call fields
+  toolName?: string;
+  toolParams?: string;
+  // input_collect fields
+  fieldName?: string;
+  variableName?: string;
+}
+
+function buildStepText(meta: StepMeta): string {
+  switch (meta.type) {
+    case "condition":
+      return `If ${meta.condition ?? "condition is met"}, then ${meta.trueBranch ?? "proceed accordingly"}. Otherwise, ${meta.falseBranch ?? "handle the alternative case"}.`;
+    case "tool_call":
+      return `Call ${meta.toolName ?? "appropriate tool"}${meta.toolParams ? ` with ${meta.toolParams}` : ""}.`;
+    case "input_collect":
+      return `Ask the customer for their ${meta.fieldName ?? "information"} and store it as ${meta.variableName ?? (meta.fieldName ?? "field").toLowerCase().replace(/\s+/g, "_")}.`;
+    default:
+      return "";
+  }
+}
+
+const STEP_TYPE_META: Record<StepType, { label: string; color: string; icon: React.ElementType }> = {
+  message:       { label: "Message",      color: "text-foreground bg-white/8 border-white/15",                          icon: MessageSquare },
+  condition:     { label: "Condition",    color: "text-orange-400 bg-orange-500/10 border-orange-500/25",               icon: GitBranch     },
+  tool_call:     { label: "Tool Call",    color: "text-blue-400 bg-blue-500/10 border-blue-500/25",                     icon: Wrench        },
+  input_collect: { label: "Collect Input", color: "text-purple-400 bg-purple-500/10 border-purple-500/25",             icon: Keyboard      },
+};
 
 // ─── Tool catalogue (mirrors src/lib/tools/registry.ts) ──────────────────
 
@@ -238,6 +277,11 @@ export default function PlaybooksPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const turnCount = testMessages.filter(m => m.role === "user").length;
 
+  // Structured step metadata — parallel to form.instructions[]
+  const [stepsMeta, setStepsMeta] = useState<Record<number, StepMeta>>({});
+  // Connected integration types for live/mock tool badges
+  const [connectedIntegrations, setConnectedIntegrations] = useState<string[]>([]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -249,6 +293,13 @@ export default function PlaybooksPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetch("/api/integrations")
+      .then(r => r.ok ? r.json() : { integrations: [] })
+      .then(d => setConnectedIntegrations((d.integrations ?? []).filter((i: { status: string }) => i.status === "active").map((i: { type: string }) => i.type)))
+      .catch(() => {});
+  }, []);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [testMessages]);
 
   function selectPlaybook(pb: Playbook) {
@@ -257,6 +308,7 @@ export default function PlaybooksPage() {
     setTestMessages([]);
     setTestVariables({});
     setVersions([]);
+    setStepsMeta({});
     setEditorTab("identity");
   }
 
@@ -406,11 +458,47 @@ export default function PlaybooksPage() {
   function updateInstruction(i: number, val: string) {
     const arr = [...(form.instructions ?? [])]; arr[i] = val; setF("instructions", arr);
   }
-  function removeInstruction(i: number) { setF("instructions", (form.instructions ?? []).filter((_, j) => j !== i)); }
+  function removeInstruction(i: number) {
+    setF("instructions", (form.instructions ?? []).filter((_, j) => j !== i));
+    setStepsMeta(prev => {
+      const next: Record<number, StepMeta> = {};
+      Object.entries(prev).forEach(([k, v]) => {
+        const ki = parseInt(k);
+        if (ki < i) next[ki] = v;
+        else if (ki > i) next[ki - 1] = v;
+      });
+      return next;
+    });
+  }
   function moveInstruction(i: number, dir: -1 | 1) {
     const arr = [...(form.instructions ?? [])]; const j = i + dir;
     if (j < 0 || j >= arr.length) return;
     [arr[i], arr[j]] = [arr[j], arr[i]]; setF("instructions", arr);
+    setStepsMeta(prev => {
+      const next = { ...prev };
+      const tmp = next[i]; next[i] = next[j]; next[j] = tmp;
+      if (next[i] === undefined) delete next[i];
+      if (next[j] === undefined) delete next[j];
+      return next;
+    });
+  }
+
+  function setStepType(i: number, type: StepType) {
+    const meta: StepMeta = { ...stepsMeta[i], type };
+    setStepsMeta(prev => ({ ...prev, [i]: meta }));
+    if (type !== "message") {
+      const arr = [...(form.instructions ?? [])];
+      arr[i] = buildStepText(meta);
+      setF("instructions", arr);
+    }
+  }
+
+  function updateStepMeta(i: number, patch: Partial<StepMeta>) {
+    const meta = { ...stepsMeta[i], ...patch } as StepMeta;
+    setStepsMeta(prev => ({ ...prev, [i]: meta }));
+    const arr = [...(form.instructions ?? [])];
+    arr[i] = buildStepText(meta);
+    setF("instructions", arr);
   }
 
   function addPolicy() { setF("policies", [...(form.policies ?? []), { text: "", severity: "soft" }] as PlaybookPolicy[]); }
@@ -430,6 +518,18 @@ export default function PlaybooksPage() {
   const filtered = filter === "all" ? playbooks : playbooks.filter(p => p.status === filter);
   const isDirty = JSON.stringify(form) !== JSON.stringify(selected);
   const visibleTools = toolCategory === "all" ? TOOLS : TOOLS.filter(t => t.category === toolCategory);
+
+  // Map integration types to which tools are "live" (real API)
+  const INTEGRATION_TOOLS: Record<string, string[]> = {
+    shopify:    ["order_lookup", "check_return_eligibility", "process_refund", "generate_label"],
+    stripe:     ["process_refund"],
+    zendesk:    ["escalate_to_human", "search_knowledge"],
+    salesforce: ["escalate_to_human"],
+    intercom:   ["escalate_to_human"],
+    hubspot:    ["escalate_to_human"],
+  };
+  const liveTools = new Set<string>();
+  connectedIntegrations.forEach(type => (INTEGRATION_TOOLS[type] ?? []).forEach(t => liveTools.add(t)));
 
   function buildPreview(): string {
     const parts: string[] = [];
@@ -654,32 +754,154 @@ export default function PlaybooksPage() {
                     <Section
                       title="Instructions"
                       badge={(form.instructions ?? []).length}
-                      subtitle="Natural language steps the agent follows in order. Be specific — reference tools by name (e.g. 'call order_lookup'), describe decision points, and include what to say."
+                      subtitle="Steps the agent follows in order. Use Message for text responses, Condition for branching logic, Tool Call to invoke integrations, and Collect Input to gather customer data."
                     >
                       <div className="space-y-2">
-                        {(form.instructions ?? []).map((ins, i) => (
-                          <motion.div key={i} layout initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="flex items-start gap-2.5">
-                            <span className="text-xs text-muted-foreground/50 mt-3 w-5 text-right shrink-0 font-mono">{i + 1}</span>
-                            <textarea
-                              value={ins}
-                              onChange={e => updateInstruction(i, e.target.value)}
-                              placeholder={`Step ${i + 1}: describe what the agent should do…`}
-                              rows={2}
-                              className="flex-1 bg-black/20 border border-white/10 rounded-xl px-3 py-2.5 text-sm outline-none text-foreground placeholder:text-muted-foreground/40 resize-none focus:border-white/20"
-                            />
-                            <div className="flex flex-col gap-0.5 shrink-0 mt-2">
-                              <button onClick={() => moveInstruction(i, -1)} disabled={i === 0} className="p-1 rounded hover:bg-white/5 text-muted-foreground disabled:opacity-20 transition-colors">
-                                <ArrowUp className="w-3 h-3" />
-                              </button>
-                              <button onClick={() => moveInstruction(i, 1)} disabled={i === (form.instructions ?? []).length - 1} className="p-1 rounded hover:bg-white/5 text-muted-foreground disabled:opacity-20 transition-colors">
-                                <ArrowDown className="w-3 h-3" />
-                              </button>
-                              <button onClick={() => removeInstruction(i)} className="p-1 rounded hover:bg-white/5 text-muted-foreground hover:text-red-400 transition-colors">
-                                <X className="w-3 h-3" />
-                              </button>
-                            </div>
-                          </motion.div>
-                        ))}
+                        {(form.instructions ?? []).map((ins, i) => {
+                          const meta = stepsMeta[i];
+                          const stepType: StepType = meta?.type ?? "message";
+                          const typeMeta = STEP_TYPE_META[stepType];
+                          const TypeIcon = typeMeta.icon;
+                          return (
+                            <motion.div key={i} layout initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} className="group">
+                              {/* Step header row */}
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <span className="text-[10px] text-muted-foreground/40 w-5 text-right shrink-0 font-mono">{i + 1}</span>
+                                {/* Type selector */}
+                                <div className="flex items-center gap-1">
+                                  {(Object.entries(STEP_TYPE_META) as [StepType, typeof STEP_TYPE_META[StepType]][]).map(([type, tm]) => {
+                                    const TIcon = tm.icon;
+                                    return (
+                                      <button
+                                        key={type}
+                                        onClick={() => setStepType(i, type)}
+                                        className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors ${stepType === type ? tm.color : "border-transparent text-muted-foreground/40 hover:text-muted-foreground"}`}
+                                      >
+                                        <TIcon className="w-2.5 h-2.5" />
+                                        {tm.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <div className="flex items-center gap-0.5 ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button onClick={() => moveInstruction(i, -1)} disabled={i === 0} className="p-1 rounded hover:bg-white/5 text-muted-foreground disabled:opacity-20 transition-colors">
+                                    <ArrowUp className="w-3 h-3" />
+                                  </button>
+                                  <button onClick={() => moveInstruction(i, 1)} disabled={i === (form.instructions ?? []).length - 1} className="p-1 rounded hover:bg-white/5 text-muted-foreground disabled:opacity-20 transition-colors">
+                                    <ArrowDown className="w-3 h-3" />
+                                  </button>
+                                  <button onClick={() => removeInstruction(i)} className="p-1 rounded hover:bg-white/5 text-muted-foreground hover:text-red-400 transition-colors">
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Step body */}
+                              <div className="ml-7">
+                                {stepType === "message" && (
+                                  <textarea
+                                    value={ins}
+                                    onChange={e => updateInstruction(i, e.target.value)}
+                                    placeholder={`Step ${i + 1}: describe what the agent should say or do…`}
+                                    rows={2}
+                                    className="w-full bg-black/20 border border-white/10 rounded-xl px-3 py-2.5 text-sm outline-none text-foreground placeholder:text-muted-foreground/40 resize-none focus:border-white/20"
+                                  />
+                                )}
+
+                                {stepType === "condition" && (
+                                  <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-3 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-medium text-orange-400 shrink-0 w-8">IF</span>
+                                      <input
+                                        value={meta?.condition ?? ""}
+                                        onChange={e => updateStepMeta(i, { condition: e.target.value })}
+                                        placeholder="e.g. the order is within the 30-day return window"
+                                        className="flex-1 bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none text-foreground placeholder:text-muted-foreground/40"
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-medium text-green-400 shrink-0 w-8">THEN</span>
+                                      <input
+                                        value={meta?.trueBranch ?? ""}
+                                        onChange={e => updateStepMeta(i, { trueBranch: e.target.value })}
+                                        placeholder="e.g. generate a return label and provide tracking info"
+                                        className="flex-1 bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none text-foreground placeholder:text-muted-foreground/40"
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-medium text-red-400 shrink-0 w-8">ELSE</span>
+                                      <input
+                                        value={meta?.falseBranch ?? ""}
+                                        onChange={e => updateStepMeta(i, { falseBranch: e.target.value })}
+                                        placeholder="e.g. apologize and explain the 30-day return policy"
+                                        className="flex-1 bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none text-foreground placeholder:text-muted-foreground/40"
+                                      />
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground/50 border-t border-white/5 pt-2">
+                                      Preview: <em>{ins || buildStepText({ ...meta, type: "condition" })}</em>
+                                    </p>
+                                  </div>
+                                )}
+
+                                {stepType === "tool_call" && (
+                                  <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-3 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-medium text-blue-400 shrink-0 w-10">Call</span>
+                                      <select
+                                        value={meta?.toolName ?? ""}
+                                        onChange={e => updateStepMeta(i, { toolName: e.target.value })}
+                                        className="flex-1 bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none text-foreground"
+                                      >
+                                        <option value="">— select tool —</option>
+                                        {TOOLS.map(t => (
+                                          <option key={t.name} value={t.name}>{t.name}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-medium text-muted-foreground shrink-0 w-10">With</span>
+                                      <input
+                                        value={meta?.toolParams ?? ""}
+                                        onChange={e => updateStepMeta(i, { toolParams: e.target.value })}
+                                        placeholder="e.g. the order number the customer provided"
+                                        className="flex-1 bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none text-foreground placeholder:text-muted-foreground/40"
+                                      />
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground/50 border-t border-white/5 pt-2">
+                                      Preview: <em>{ins || buildStepText({ ...meta, type: "tool_call" })}</em>
+                                    </p>
+                                  </div>
+                                )}
+
+                                {stepType === "input_collect" && (
+                                  <div className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-3 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-medium text-purple-400 shrink-0 w-10">Ask for</span>
+                                      <input
+                                        value={meta?.fieldName ?? ""}
+                                        onChange={e => updateStepMeta(i, { fieldName: e.target.value })}
+                                        placeholder="e.g. order number"
+                                        className="flex-1 bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none text-foreground placeholder:text-muted-foreground/40"
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] font-medium text-muted-foreground shrink-0 w-10">Store as</span>
+                                      <input
+                                        value={meta?.variableName ?? ""}
+                                        onChange={e => updateStepMeta(i, { variableName: e.target.value })}
+                                        placeholder="e.g. order_number"
+                                        className="flex-1 bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none text-foreground font-mono placeholder:text-muted-foreground/40"
+                                      />
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground/50 border-t border-white/5 pt-2">
+                                      Preview: <em>{ins || buildStepText({ ...meta, type: "input_collect" })}</em>
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            </motion.div>
+                          );
+                        })}
                         <button
                           onClick={addInstruction}
                           className="w-full py-2.5 border border-dashed border-white/15 rounded-xl text-xs text-muted-foreground hover:text-foreground hover:border-white/30 transition-colors flex items-center justify-center gap-1.5"
@@ -730,7 +952,7 @@ export default function PlaybooksPage() {
                     <Section
                       title="Toolkit"
                       badge={(form.actions ?? []).length}
-                      subtitle="Enable the tools this playbook can invoke. The LLM decides when to call them based on your instructions. Tools marked with a lock require supervisor approval."
+                      subtitle="Enable the tools this playbook can invoke. Live tools route to your connected integrations — mock tools use realistic test data."
                     >
                       {/* Category filter */}
                       <div className="flex gap-1.5 mb-4 flex-wrap">
@@ -744,11 +966,19 @@ export default function PlaybooksPage() {
                         ))}
                       </div>
 
+                      {connectedIntegrations.length === 0 && (
+                        <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-white/3 border border-white/8 text-[10px] text-muted-foreground">
+                          <Radio className="w-3 h-3 shrink-0" />
+                          No integrations connected — tools run with mock data.
+                          <a href="/integrations" className="text-[#c4a574] hover:underline ml-auto shrink-0">Connect →</a>
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-2">
                         {visibleTools.map(tool => {
                           const enabled = (form.actions ?? []).includes(tool.name);
                           const Icon = tool.icon;
                           const meta = CATEGORY_META[tool.category];
+                          const isLive = liveTools.has(tool.name);
                           return (
                             <button
                               key={tool.name}
@@ -761,6 +991,11 @@ export default function PlaybooksPage() {
                                   <code className="text-[10px] font-mono font-semibold">{tool.name}</code>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0 ml-1">
+                                  {isLive ? (
+                                    <span className="text-[8px] px-1 py-0.5 rounded bg-green-500/15 text-green-400 font-medium">LIVE</span>
+                                  ) : (
+                                    <span className="text-[8px] px-1 py-0.5 rounded bg-white/5 text-muted-foreground/50">MOCK</span>
+                                  )}
                                   {tool.auth && <span title="Requires approval"><Lock className="w-2.5 h-2.5 opacity-50" /></span>}
                                   {enabled && <Check className="w-3 h-3" />}
                                 </div>
