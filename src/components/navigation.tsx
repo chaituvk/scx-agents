@@ -75,6 +75,7 @@ const studioTools = [
 ];
 
 const accountTools = [
+  { name: "Dashboard", href: "/dashboard", icon: BarChart3 },
   { name: "Inbox", href: "/inbox", icon: Inbox },
   { name: "Handover", href: "/handover", icon: AlertCircle },
   { name: "Analytics", href: "/analytics", icon: TrendingUp },
