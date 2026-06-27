@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 export type AgentStatus = "online" | "away" | "offline" | "busy";
 
 // In-process store: agentId → { status, updated_at }
-const AGENT_STATUS = new Map<string, { status: AgentStatus; updated_at: string }>();
+export const AGENT_STATUS = new Map<string, { status: AgentStatus; updated_at: string }>();
 const VALID_STATUSES: AgentStatus[] = ["online", "away", "offline", "busy"];
 
 export function getAgentStatus(agentId: string): { status: AgentStatus; updated_at: string } {

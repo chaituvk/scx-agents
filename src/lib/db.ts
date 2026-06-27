@@ -534,7 +534,48 @@ function initPgSchema() {
     CREATE INDEX IF NOT EXISTS idx_playbooks_tenant ON playbooks(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_playbooks_status ON playbooks(status);
 
-    CREATE TABLE IF NOT EXISTS playbook_states (
+    CREATE TABLE IF NOT EXISTS playbook_versions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL REFERENCES playbooks(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      persona TEXT DEFAULT '',
+      topics JSONB DEFAULT '[]',
+      instructions JSONB DEFAULT '[]',
+      policies JSONB DEFAULT '[]',
+      actions JSONB DEFAULT '[]',
+      escalation_triggers JSONB DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT,
+      change_summary TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(playbook_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbook_versions_playbook ON playbook_versions(playbook_id);
+    CREATE INDEX IF NOT EXISTS idx_playbook_versions_tenant ON playbook_versions(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS proactive_triggers (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      trigger_type TEXT NOT NULL DEFAULT 'page_dwell',
+      conditions JSONB DEFAULT '{}',
+      message TEXT NOT NULL,
+      playbook_id TEXT REFERENCES playbooks(id) ON DELETE SET NULL,
+      delay_seconds INTEGER DEFAULT 30,
+      cooldown_hours INTEGER DEFAULT 24,
+      priority INTEGER DEFAULT 100,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_proactive_triggers_tenant ON proactive_triggers(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_proactive_triggers_status ON proactive_triggers(status);
+
+    CREATE TABLE IF NOT EXISTS playbooks (
       conversation_id TEXT NOT NULL,
       tenant_id TEXT NOT NULL,
       playbook_id TEXT NOT NULL,
@@ -1121,6 +1162,45 @@ function initSqliteSchema() {
       created_at TEXT,
       updated_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS playbook_versions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL REFERENCES playbooks(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      persona TEXT DEFAULT '',
+      topics TEXT DEFAULT '[]',
+      instructions TEXT DEFAULT '[]',
+      policies TEXT DEFAULT '[]',
+      actions TEXT DEFAULT '[]',
+      escalation_triggers TEXT DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT,
+      change_summary TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(playbook_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbook_versions_playbook ON playbook_versions(playbook_id);
+
+    CREATE TABLE IF NOT EXISTS proactive_triggers (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      trigger_type TEXT NOT NULL DEFAULT 'page_dwell',
+      conditions TEXT DEFAULT '{}',
+      message TEXT NOT NULL,
+      playbook_id TEXT,
+      delay_seconds INTEGER DEFAULT 30,
+      cooldown_hours INTEGER DEFAULT 24,
+      priority INTEGER DEFAULT 100,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_proactive_triggers_tenant ON proactive_triggers(tenant_id);
 
     CREATE TABLE IF NOT EXISTS playbook_states (
       conversation_id TEXT NOT NULL,

@@ -34,6 +34,9 @@ import { customerProfileRepo } from "../repositories/customer-profile";
 import { detectLanguage, getSystemLanguageInstruction, type SupportedLanguage } from "../i18n/detect-language";
 import { applyRoutingRules } from "../routing/evaluate";
 import { conversationTagsRepo } from "../repositories/conversation-tags";
+import { setTyping } from "../../app/api/conversations/[id]/typing/route";
+import { analyzeSentiment, blendSentiment } from "../sentiment/analyze";
+import { slaRepo } from "../repositories/sla";
 
 const KNOWN_INTENTS = [
   "knowledge_query",
@@ -388,29 +391,34 @@ export class Orchestrator {
     const variables = input.variables ?? {};
     let subOut: SubAgentRunOutput;
     let subName: SubAgentName;
-    if (input.collaboratingAgents && input.collaboratingAgents.length > 0) {
-      const collabResult = await this.collaborate(
-        input.collaboratingAgents,
-        input,
-        ctx,
-        memCtx,
-        variables,
-      );
-      subOut = {
-        response: collabResult.response,
-        variables: collabResult.variables,
-        toolCalls: collabResult.toolCalls,
-        done: false,
-        actions: [],
-      };
-      subName = input.collaboratingAgents[0];
-    } else {
-      const sub = selectSubAgent(triage);
-      subName = sub.name;
-      subOut = await sub.run(
-        { message: input.message, triage, context: memCtx, variables },
-        ctx
-      );
+    setTyping(input.conversationId, true);
+    try {
+      if (input.collaboratingAgents && input.collaboratingAgents.length > 0) {
+        const collabResult = await this.collaborate(
+          input.collaboratingAgents,
+          input,
+          ctx,
+          memCtx,
+          variables,
+        );
+        subOut = {
+          response: collabResult.response,
+          variables: collabResult.variables,
+          toolCalls: collabResult.toolCalls,
+          done: false,
+          actions: [],
+        };
+        subName = input.collaboratingAgents[0];
+      } else {
+        const sub = selectSubAgent(triage);
+        subName = sub.name;
+        subOut = await sub.run(
+          { message: input.message, triage, context: memCtx, variables },
+          ctx
+        );
+      }
+    } finally {
+      setTyping(input.conversationId, false);
     }
 
     // Merge agent-written variables back into shared memory context so the
@@ -485,6 +493,28 @@ export class Orchestrator {
         agent_id: subName,
       }),
     ]).catch((err) => console.error("[orchestrator] message persistence failed:", err));
+
+    // 7b-pre. Update conversation sentiment based on the user's message
+    //         (non-blocking). We analyze the user message rather than the AI
+    //         response so sentiment reflects the customer's mood, not ours.
+    try {
+      const existing = await conversationRepo.findById(input.conversationId);
+      if (existing) {
+        const { sentiment: incomingSentiment } = analyzeSentiment(input.message);
+        const currentSentiment = existing.sentiment ?? "neutral";
+        const newSentiment = blendSentiment(currentSentiment as "positive" | "neutral" | "negative", incomingSentiment);
+        if (newSentiment !== currentSentiment) {
+          conversationRepo.update(input.conversationId, { sentiment: newSentiment }).catch(() => {});
+        }
+
+        // SLA first-response: if this is the first assistant response, record
+        // it and dispatch breach checks in the background.
+        const msgCount = memCtx.history?.length ?? 0;
+        if (msgCount <= 1) {
+          slaRepo.checkBreaches(input.tenantId).catch(() => {});
+        }
+      }
+    } catch { /* non-fatal */ }
 
     // 7b. Dispatch outbound webhook events (non-blocking).
     dispatchWebhookEvent({

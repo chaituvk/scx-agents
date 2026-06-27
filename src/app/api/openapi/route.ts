@@ -268,6 +268,32 @@ const SPEC = {
     "/metrics": {
       get: { summary: "Prometheus metrics export", tags: ["Analytics"], security: [], responses: { 200: { description: "Prometheus text format" } } },
     },
+    "/playbooks/{id}/versions": {
+      get: { summary: "List playbook version history", tags: ["Playbooks"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "Version list" } } },
+      post: { summary: "Snapshot current playbook as a new version", tags: ["Playbooks"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 201: { description: "New version" } } },
+    },
+    "/proactive-triggers": {
+      get: { summary: "List proactive chat triggers", tags: ["Proactive"], responses: { 200: { description: "Trigger list" } } },
+      post: { summary: "Create proactive trigger", tags: ["Proactive"], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["name", "message"], properties: { name: { type: "string" }, trigger_type: { type: "string", enum: ["page_dwell", "exit_intent", "scroll_depth", "return_visitor", "custom"] }, message: { type: "string" }, conditions: { type: "object" }, delay_seconds: { type: "integer" }, cooldown_hours: { type: "integer" }, playbook_id: { type: "string" } } } } } }, responses: { 201: { description: "Created trigger" } } },
+    },
+    "/proactive-triggers/{id}": {
+      get: { summary: "Get proactive trigger", tags: ["Proactive"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "Trigger" }, 404: { description: "Not found" } } },
+      put: { summary: "Update proactive trigger", tags: ["Proactive"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "Updated trigger" } } },
+      delete: { summary: "Delete proactive trigger", tags: ["Proactive"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "Deleted" } } },
+    },
+    "/agents/{id}/status": {
+      get: { summary: "Get agent availability status", tags: ["Agents"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "Status object", content: { "application/json": { schema: { type: "object", properties: { agent_id: { type: "string" }, status: { type: "string", enum: ["online", "away", "offline", "busy"] }, updated_at: { type: "string", format: "date-time" } } } } } } } },
+      put: { summary: "Set agent availability status", tags: ["Agents"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["status"], properties: { status: { type: "string", enum: ["online", "away", "offline", "busy"] } } } } } }, responses: { 200: { description: "Updated status" }, 403: { description: "Cannot set status for another agent" } } },
+    },
+    "/conversations/{id}/typing": {
+      get: { summary: "Typing indicator SSE stream", tags: ["Conversations"], security: [], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "SSE stream — events: { typing: boolean }" } } },
+    },
+    "/conversations/{id}/accept-handoff": {
+      post: { summary: "Accept escalated conversation handoff", tags: ["Conversations"], parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { 200: { description: "Accepted handoff — conversation assigned to caller" }, 409: { description: "Conversation not in escalated state" } } },
+    },
+    "/widget/triggers": {
+      get: { summary: "Public: proactive triggers for web widget", tags: ["Widget"], security: [], parameters: [{ name: "tenant_id", in: "query", required: true, schema: { type: "string" } }, { name: "trigger_type", in: "query", required: false, schema: { type: "string" } }], responses: { 200: { description: "Active triggers for the tenant" } } },
+    },
   },
 };
 
