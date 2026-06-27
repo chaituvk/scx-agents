@@ -14,6 +14,10 @@ import {
   ChevronRight,
   History,
   RotateCcw,
+  Send,
+  Bot,
+  User,
+  FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -101,6 +105,10 @@ export default function PlaybooksPage() {
   const [showVersions, setShowVersions] = useState(false);
   const [versions, setVersions] = useState<{id: string; version: number; change_summary?: string; created_at: string}[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
+  const [testMessages, setTestMessages] = useState<{role: "user" | "assistant"; content: string; escalated?: boolean}[]>([]);
+  const [testInput, setTestInput] = useState("");
+  const [testRunning, setTestRunning] = useState(false);
+  const [testVariables, setTestVariables] = useState<Record<string, string>>({});
 
   // ── Fetch on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -113,8 +121,8 @@ export default function PlaybooksPage() {
     try {
       const res = await fetch("/api/playbooks");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Playbook[];
-      setPlaybooks(data);
+      const data = await res.json();
+      setPlaybooks(data.playbooks ?? []);
     } catch (e) {
       setError("Failed to load playbooks.");
       console.error(e);
@@ -128,6 +136,37 @@ export default function PlaybooksPage() {
     setSelected(pb);
     setDraft(structuredClone(pb));
     setConfirmDelete(false);
+    setTestMessages([]);
+    setTestInput("");
+    setTestVariables({});
+  }
+
+  // ── Test console ─────────────────────────────────────────────────────────────
+  async function runTest() {
+    if (!testInput.trim() || !selected || selected.id.startsWith("__new__")) return;
+    const userMsg = testInput.trim();
+    setTestInput("");
+    const history = testMessages.map(m => ({ role: m.role, content: m.content }));
+    setTestMessages(prev => [...prev, { role: "user", content: userMsg }]);
+    setTestRunning(true);
+    try {
+      const res = await fetch(`/api/playbooks/${selected.id}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [...history, { role: "user", content: userMsg }], variables: testVariables }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTestMessages(prev => [...prev, { role: "assistant", content: data.response ?? "(no response)", escalated: data.escalated }]);
+        if (data.variables) setTestVariables(data.variables);
+      } else {
+        setTestMessages(prev => [...prev, { role: "assistant", content: `Error: ${res.status}` }]);
+      }
+    } catch {
+      setTestMessages(prev => [...prev, { role: "assistant", content: "Network error" }]);
+    } finally {
+      setTestRunning(false);
+    }
   }
 
   // ── Create new playbook ─────────────────────────────────────────────────────
@@ -154,7 +193,8 @@ export default function PlaybooksPage() {
         body: JSON.stringify(draft),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const saved = (await res.json()) as Playbook;
+      const body = await res.json();
+      const saved: Playbook = body.playbook ?? body;
       setPlaybooks((prev) =>
         isNew
           ? [...prev, saved]
@@ -180,7 +220,8 @@ export default function PlaybooksPage() {
         method: "POST",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const updated = (await res.json()) as Playbook;
+      const body = await res.json();
+      const updated: Playbook = body.playbook ?? body;
       // Deactivate others, activate this one
       setPlaybooks((prev) =>
         prev.map((p) =>
@@ -408,13 +449,14 @@ export default function PlaybooksPage() {
 
                   <CardContent className="pt-5">
                     <Tabs defaultValue="identity" className="w-full">
-                      <TabsList className="bg-[#0a0a0a] border border-white/5 w-full grid grid-cols-4">
+                      <TabsList className="bg-[#0a0a0a] border border-white/5 w-full grid grid-cols-5">
                         {(
                           [
                             ["identity", "Identity"],
                             ["instructions", "Instructions"],
                             ["policies", "Policies"],
                             ["actions", "Actions"],
+                            ["test", "Test"],
                           ] as const
                         ).map(([val, label]) => (
                           <TabsTrigger
@@ -422,7 +464,7 @@ export default function PlaybooksPage() {
                             value={val}
                             className="data-[state=active]:bg-[#c4a574]/20 data-[state=active]:text-[#c4a574] text-xs"
                           >
-                            {label}
+                            {val === "test" ? <><FlaskConical className="w-3 h-3 mr-1 inline" />{label}</> : label}
                           </TabsTrigger>
                         ))}
                       </TabsList>
@@ -825,6 +867,93 @@ export default function PlaybooksPage() {
                             Add Trigger
                           </Button>
                         </div>
+                      </TabsContent>
+                      {/* ── Tab 5: Test Console ── */}
+                      <TabsContent value="test" className="mt-5">
+                        {selected?.id.startsWith("__new__") ? (
+                          <div className="text-center py-12 text-muted-foreground text-sm">
+                            Save the playbook before testing.
+                          </div>
+                        ) : (
+                          <div className="flex flex-col h-[420px]">
+                            {Object.keys(testVariables).length > 0 && (
+                              <div className="mb-3 p-2.5 rounded-lg bg-white/3 border border-white/5">
+                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">Extracted Variables</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {Object.entries(testVariables).map(([k, v]) => (
+                                    <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-[#c4a574]/10 border border-[#c4a574]/20 text-[#c4a574]">
+                                      {k}: <span className="text-white/70">{String(v)}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            <div className="flex-1 overflow-y-auto space-y-3 pr-1 mb-3">
+                              {testMessages.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                                  <FlaskConical className="w-8 h-8 mb-2 opacity-30" />
+                                  <p className="text-xs">Send a message to test this playbook.</p>
+                                  <p className="text-[10px] mt-1 opacity-60">Uses RAG from your knowledge base.</p>
+                                </div>
+                              ) : (
+                                testMessages.map((m, i) => (
+                                  <div key={i} className={`flex gap-2 ${m.role === "assistant" ? "" : "flex-row-reverse"}`}>
+                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${m.role === "assistant" ? "bg-[#c4a574]/20" : "bg-white/10"}`}>
+                                      {m.role === "assistant" ? <Bot className="w-3 h-3 text-[#c4a574]" /> : <User className="w-3 h-3 text-white/60" />}
+                                    </div>
+                                    <div className={`max-w-[80%] rounded-lg px-3 py-2 text-xs ${m.role === "assistant" ? "bg-[#1a1a1a] text-foreground border border-white/5" : "bg-[#c4a574]/20 text-white border border-[#c4a574]/20"}`}>
+                                      <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
+                                      {m.escalated && (
+                                        <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-full bg-orange-500/20 border border-orange-500/30 text-orange-400">
+                                          Escalated to human
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                              {testRunning && (
+                                <div className="flex gap-2">
+                                  <div className="w-6 h-6 rounded-full flex items-center justify-center bg-[#c4a574]/20 shrink-0">
+                                    <Bot className="w-3 h-3 text-[#c4a574]" />
+                                  </div>
+                                  <div className="rounded-lg px-3 py-2 bg-[#1a1a1a] border border-white/5">
+                                    <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex gap-2 shrink-0">
+                              <input
+                                type="text"
+                                value={testInput}
+                                onChange={(e) => setTestInput(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runTest(); } }}
+                                placeholder="Type a test message…"
+                                className="flex-1 text-sm px-3 py-2 rounded-lg bg-[#0a0a0a] border border-white/10 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-[#c4a574]/40"
+                              />
+                              <Button
+                                onClick={runTest}
+                                disabled={!testInput.trim() || testRunning}
+                                size="sm"
+                                className="bg-[#c4a574] text-[#0a0a0a] hover:bg-[#d4c4b0] shrink-0"
+                              >
+                                <Send className="w-4 h-4" />
+                              </Button>
+                              {testMessages.length > 0 && (
+                                <Button
+                                  onClick={() => { setTestMessages([]); setTestVariables({}); }}
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-white/10 text-muted-foreground shrink-0"
+                                  title="Clear conversation"
+                                >
+                                  <X className="w-4 h-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </TabsContent>
                     </Tabs>
 

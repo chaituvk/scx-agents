@@ -81,6 +81,8 @@ export default function InboxPage() {
   const [notesSaving, setNotesSaving] = useState(false);
   const [teamMembers, setTeamMembers] = useState<{ id: string; name: string; email: string }[]>([]);
   const [assignOpen, setAssignOpen] = useState(false);
+  const [convTags, setConvTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<EventSource | null>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,6 +135,8 @@ export default function InboxPage() {
     setNotes([]);
     setNoteText("");
     setSummary(null);
+    setConvTags([]);
+    setTagInput("");
 
     // Load messages
     setCopilotSuggestions([]);
@@ -145,6 +149,9 @@ export default function InboxPage() {
     } finally {
       setMsgLoading(false);
     }
+
+    // Load tags
+    fetch(`/api/conversations/${conv.id}/tags`).then(r => r.json()).then(d => setConvTags(d.tags ?? [])).catch(() => {});
 
     // Load copilot suggestions
     if (conv.status === "open") {
@@ -263,6 +270,39 @@ export default function InboxPage() {
       }
     } catch { /* non-fatal */ }
     finally { setSummaryLoading(false); }
+  }
+
+  async function addTag(tag: string) {
+    const t = tag.trim().toLowerCase().replace(/\s+/g, "-");
+    if (!t || !selected || convTags.includes(t)) return;
+    await fetch(`/api/conversations/${selected.id}/tags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag: t }),
+    });
+    setConvTags(prev => [...prev, t]);
+    setTagInput("");
+  }
+
+  async function removeTag(tag: string) {
+    if (!selected) return;
+    await fetch(`/api/conversations/${selected.id}/tags`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tags: [tag] }),
+    });
+    setConvTags(prev => prev.filter(t => t !== tag));
+  }
+
+  async function updatePriority(priority: string) {
+    if (!selected) return;
+    await fetch(`/api/conversations/${selected.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priority }),
+    });
+    setSelected(s => s ? { ...s, priority } : null);
+    setConversations(prev => prev.map(c => c.id === selected.id ? { ...c, priority } : c));
   }
 
   function downloadTranscript(format: "html" | "text") {
@@ -438,6 +478,19 @@ export default function InboxPage() {
                   )}
                 </div>
               )}
+              {/* Priority dropdown */}
+              <div className="relative">
+                <select
+                  value={selected.priority}
+                  onChange={(e) => updatePriority(e.target.value)}
+                  className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground appearance-none cursor-pointer pr-6"
+                >
+                  <option value="normal">Normal</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+                <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground pointer-events-none" />
+              </div>
               {selected.status === "open" && (
                 <Button variant="outline" size="sm" onClick={closeConversation} className="gap-1 text-xs">
                   <CheckCircle className="w-3.5 h-3.5" /> Close
@@ -685,6 +738,46 @@ export default function InboxPage() {
               ) : summary ? (
                 <p className="text-xs text-muted-foreground leading-relaxed bg-white/3 p-2.5 rounded-lg border border-white/5">{summary}</p>
               ) : null}
+            </div>
+
+            {/* Tags */}
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Tags</p>
+              <div className="flex flex-wrap gap-1 mb-2">
+                {convTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-muted-foreground"
+                  >
+                    {tag}
+                    <button
+                      onClick={() => removeTag(tag)}
+                      className="hover:text-red-400 transition-colors leading-none"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-1">
+                <input
+                  type="text"
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagInput); }
+                  }}
+                  placeholder="Add tag…"
+                  className="flex-1 text-[10px] px-2 py-1 rounded bg-white/5 border border-white/10 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-[#c4a574]/40"
+                />
+                <button
+                  onClick={() => addTag(tagInput)}
+                  disabled={!tagInput.trim()}
+                  className="text-[10px] px-2 py-1 rounded bg-white/5 border border-white/10 text-[#c4a574] hover:bg-white/10 disabled:opacity-40 transition-colors"
+                >
+                  Add
+                </button>
+              </div>
             </div>
           </div>
         </div>
