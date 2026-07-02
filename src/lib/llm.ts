@@ -227,8 +227,19 @@ async function callAnthropic(messages: LLMMessage[], tier: ModelTier = "balanced
     }),
   });
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    // Surface error details so callers can distinguish rate-limit vs auth vs model errors
+    const err = await res.json().catch(() => ({}));
+    console.error("[Anthropic] API error", res.status, err);
+    return null;
+  }
   const data = await res.json();
+  // Claude Fable 5 / Claude 4: stop_reason "refusal" means the safety classifier
+  // declined the request. Content array is empty on a pre-output refusal.
+  if (data.stop_reason === "refusal") {
+    console.warn("[Anthropic] Request refused by safety classifier", data.stop_details);
+    return null;
+  }
   return {
     content: data.content?.[0]?.text || "",
     model: data.model,
@@ -370,7 +381,7 @@ export async function* chatStream(messages: LLMMessage[]): AsyncIterable<string>
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022",
+        model: process.env.ANTHROPIC_MODEL || TIER_MODELS.anthropic.balanced,
         max_tokens: 4000,
         stream: true,
         system: systemMsg,
@@ -392,6 +403,11 @@ export async function* chatStream(messages: LLMMessage[]): AsyncIterable<string>
           if (!line.startsWith("data: ")) continue;
           try {
             const json = JSON.parse(line.slice(6));
+            // Fable 5: safety refusal arrives as message_delta with stop_reason:"refusal"
+            if (json?.type === "message_delta" && json?.delta?.stop_reason === "refusal") {
+              console.warn("[Anthropic stream] Request refused by safety classifier");
+              return;
+            }
             const delta = json?.delta?.text;
             if (delta) yield delta;
           } catch { /* skip malformed */ }
