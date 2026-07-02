@@ -14,7 +14,7 @@ export const runtimePolicyRuleSchema = z.object({
 
 export const runtimeProfileSchema = z.object({
   name: z.string().min(1),
-  kind: z.enum(["router", "specialist", "policy"]).default("specialist"),
+  kind: z.enum(["router", "specialist", "policy", "guardrail"]).default("specialist"),
   status: z.enum(["active", "draft", "archived"]).default("active"),
   description: z.string().default("").optional(),
   allowed_journeys: z.array(z.string()).default([]).optional(),

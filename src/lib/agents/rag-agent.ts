@@ -2,6 +2,7 @@
 
 import { retrieveSkill, respondSkill } from "../skills";
 import { policyChecker } from "../policy";
+import { knowledgeGapRepo } from "../repositories";
 import {
   loadSpecialistProfile,
   applyGuardrailsToSystemPrompt,
@@ -36,7 +37,10 @@ export const ragAgent: SubAgent = {
     // see which profile governed the turn.
     const profile = await loadSpecialistProfile(ctx.tenantId, input.triage.specialistId);
     await auditProfileBinding(ctx.audit, "rag", profile, input.triage.specialistId);
-    const systemPrompt = applyGuardrailsToSystemPrompt(RAG_SYSTEM_PROMPT, profile);
+    const basePrompt = input.context.languageInstruction
+      ? `${input.context.languageInstruction}\n\n${RAG_SYSTEM_PROMPT}`
+      : RAG_SYSTEM_PROMPT;
+    const systemPrompt = applyGuardrailsToSystemPrompt(basePrompt, profile);
 
     const retrieved: RetrieveOutput = await retrieveSkill.run(
       { query: input.message, topK: 3 },
@@ -56,6 +60,19 @@ export const ragAgent: SubAgent = {
 
     let content = responded.content || SAFE_FALLBACK;
     const citations = responded.citations ?? [];
+
+    // Auto-record knowledge gaps: when no passages were found, the question
+    // likely falls outside the knowledge base. Log it so operators can fill the gap.
+    if (retrieved.passages.length === 0) {
+      knowledgeGapRepo.create({
+        tenant_id: ctx.tenantId,
+        question: input.message,
+        frequency: 1,
+        status: "open",
+        suggested_answer: null,
+        source_ids: null,
+      }).catch(() => {});
+    }
 
     const decision = await policyChecker.validateResponse({
       content,

@@ -1,5 +1,6 @@
 import { query, getOne, run } from "@/lib/db";
 import { Repository } from "./base";
+import { isPostgres } from "@/lib/db";
 
 export interface Insight {
   id: string;
@@ -68,6 +69,48 @@ class InsightRepo extends Repository<Insight> {
   async delete(id: string): Promise<boolean> {
     const result = await run("DELETE FROM insights WHERE id = $1", [id]);
     return (result.changes || 0) > 0;
+  }
+
+  async computeAvgResponseTime(tenantId: string): Promise<number> {
+    // Match turn_end events with corresponding turn_start events by conversation_id
+    // from the last 30 days, and average the difference in seconds.
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    if (isPostgres()) {
+      // PostgreSQL: ts is TIMESTAMPTZ, use EXTRACT(EPOCH ...) for diff in seconds
+      const row = await getOne(
+        `SELECT AVG(EXTRACT(EPOCH FROM (e.ts - s.ts))) AS avg_seconds
+         FROM audit_events e
+         JOIN audit_events s
+           ON s.conversation_id = e.conversation_id
+          AND s.tenant_id = e.tenant_id
+          AND s.type = 'turn_start'
+         WHERE e.tenant_id = $1
+           AND e.type = 'turn_end'
+           AND e.ts >= $2`,
+        [tenantId, thirtyDaysAgo]
+      );
+      const val = parseFloat(row?.avg_seconds ?? "0");
+      return Number.isFinite(val) && val > 0 ? Math.round(val * 10) / 10 : 0;
+    } else {
+      // SQLite: ts is stored as ISO string text, use strftime to convert
+      const row = await getOne(
+        `SELECT AVG(
+           (strftime('%s', e.ts) - strftime('%s', s.ts))
+         ) AS avg_seconds
+         FROM audit_events e
+         JOIN audit_events s
+           ON s.conversation_id = e.conversation_id
+          AND s.tenant_id = e.tenant_id
+          AND s.type = 'turn_start'
+         WHERE e.tenant_id = $1
+           AND e.type = 'turn_end'
+           AND e.ts >= $2`,
+        [tenantId, thirtyDaysAgo]
+      );
+      const val = parseFloat(row?.avg_seconds ?? "0");
+      return Number.isFinite(val) && val > 0 ? Math.round(val * 10) / 10 : 0;
+    }
   }
 }
 

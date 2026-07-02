@@ -14,6 +14,7 @@
 import { summarizeSkill } from "../skills";
 import { dialogStateRepo } from "../repositories";
 import { auditStore } from "../audit";
+import { notifyEscalation, isSlackAvailable } from "../integrations/adapters/slack";
 import type {
   SubAgent,
   SubAgentRunInput,
@@ -96,6 +97,15 @@ export const escalationAgent: SubAgent = {
     }
 
     await ctx.audit.emit("escalation_handoff", handoff as unknown as Record<string, unknown>);
+
+    // Notify Slack (non-blocking, best-effort)
+    if (isSlackAvailable()) {
+      notifyEscalation({
+        conversationId: ctx.conversationId,
+        customerName: (input.context.profile as { name?: string } | undefined)?.name ?? "Customer",
+        reason: input.message.slice(0, 120),
+      }).catch(() => {});
+    }
 
     const response = `I'll transfer you to a human agent. Here's what I've shared with them: ${summary}`;
 

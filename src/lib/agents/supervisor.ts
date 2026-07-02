@@ -24,6 +24,7 @@
 import { policyChecker } from "../policy";
 import { callModel } from "../model-router";
 import { tenantRepo } from "../repositories";
+import { analyzeSentiment } from "../skills/sentiment";
 import type {
   AuditEmitter,
   RetrievePassage,
@@ -115,6 +116,26 @@ async function rewriteForIssue(
   } catch {
     return null;
   }
+}
+
+interface EscalationSignals {
+  turnCount: number;
+  negSentimentCount: number;
+  toolFailureCount: number;
+  policyDenyCount: number;
+  hasPendingApproval: boolean;
+}
+
+function predictEscalationRisk(signals: EscalationSignals): number {
+  let risk = 0;
+  if (signals.negSentimentCount >= 2) risk += 0.4;
+  if (signals.negSentimentCount >= 1) risk += 0.15;
+  if (signals.toolFailureCount >= 2) risk += 0.3;
+  if (signals.toolFailureCount >= 1) risk += 0.1;
+  if (signals.policyDenyCount >= 1) risk += 0.2;
+  if (signals.turnCount > 10) risk += 0.15;
+  if (signals.hasPendingApproval) risk += 0.2;
+  return Math.min(risk, 1.0);
 }
 
 export class SupervisorAgent {
@@ -217,12 +238,30 @@ export class SupervisorAgent {
       rewrittenContent = rewritten ?? SAFE_FALLBACK;
     }
 
-    const out: SupervisorCheckOutput = { pass: !softFail, issues, rewrittenContent };
+    // 5. Sentiment analysis on the agent response.
+    const sentiment = await analyzeSentiment(input.response).catch(() => undefined);
+
+    // 6. Predictive escalation risk based on current check's issues.
+    const escalationSignals: EscalationSignals = {
+      turnCount: 0, // unknown without DB query
+      negSentimentCount: issues.filter(i => i.kind === 'off_topic' || i.kind === 'tone').length,
+      toolFailureCount: 0,
+      policyDenyCount: issues.filter(i => i.kind === 'policy').length,
+      hasPendingApproval: false,
+    };
+    const escalationRisk = predictEscalationRisk(escalationSignals);
+    const shouldEscalate = escalationRisk >= 0.6;
+
+    const out: SupervisorCheckOutput = { pass: !softFail, issues, rewrittenContent, sentiment, escalationRisk, shouldEscalate };
     await ctx.audit.emit("supervisor_check", {
       pass: out.pass,
       issues: out.issues,
       has_passages: hasPassages,
       rewritten: !!rewrittenContent,
+      sentiment_score: sentiment?.score,
+      sentiment_confidence: sentiment?.confidence,
+      escalation_risk: escalationRisk,
+      should_escalate: shouldEscalate,
     });
     return out;
   }

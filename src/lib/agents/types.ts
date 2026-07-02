@@ -71,6 +71,7 @@ export interface TriageInput {
 export interface TriageOutput {
   intent: string;
   journeyId?: string;
+  playbookId?: string;
   specialistId?: string;
   subAgent: SubAgentName;
   confidence: number;
@@ -170,6 +171,12 @@ export interface MemoryContext {
   profile?: { id: string; name?: string; email?: string; tier?: string };
   history: Message[];
   knowledge: RetrievePassage[];
+  /**
+   * Language instruction injected by the orchestrator when a non-English
+   * language is detected. Sub-agents should prepend this to their system
+   * prompt so the LLM responds in the customer's language.
+   */
+  languageInstruction?: string;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -277,7 +284,7 @@ export interface SessionState {
 // Sub-agents
 // ────────────────────────────────────────────────────────────────────────────
 
-export type SubAgentName = "rag" | "workflow" | "tool" | "escalation" | "general";
+export type SubAgentName = "rag" | "workflow" | "tool" | "escalation" | "general" | "playbook";
 
 export interface SubAgentRunInput {
   message: string;
@@ -357,6 +364,10 @@ export interface PendingApproval {
   journeyId: string;
   /** Node where execution paused — the policy_check node itself. */
   nodeId: string;
+  /** Set for playbook approvals — identifies which playbook was running. */
+  playbookId?: string;
+  /** Which sub-agent owns this approval ("workflow" | "playbook"). */
+  subAgent?: string;
   /** Runtime profile the policy_check ran against, when available. */
   profile?: string;
   /** Policy id from the runtime decision, if the rule named one. */
@@ -389,6 +400,9 @@ export interface SupervisorCheckOutput {
   pass: boolean;
   issues: Array<{ kind: "pii" | "off_topic" | "ungrounded" | "tone" | "policy"; detail: string }>;
   rewrittenContent?: string;
+  sentiment?: import("../skills/sentiment").SentimentResult;
+  escalationRisk?: number;
+  shouldEscalate?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -410,6 +424,16 @@ export interface OrchestratorTurnInput {
    */
   requestedJourneyId?: string;
   forceSubAgent?: SubAgentName;
+  /**
+   * When set, the orchestrator runs these agents in parallel (collaboration
+   * mode) instead of dispatching to a single sub-agent chosen by triage.
+   */
+  collaboratingAgents?: SubAgentName[];
+  /**
+   * Response channel — when provided (and not 'web'), the final response is
+   * passed through the channel formatter before being returned.
+   */
+  channel?: string;
 }
 
 export interface OrchestratorTurnOutput {
@@ -424,4 +448,9 @@ export interface OrchestratorTurnOutput {
   actions: Array<{ type: string; payload: Record<string, unknown> }>;
   /** Mirrored from SubAgentRunOutput when the turn ended in a held state. */
   pendingApproval?: PendingApproval;
+  /**
+   * The channel the response was formatted for, when channel formatting was
+   * applied (i.e. channel was set and was not 'web').
+   */
+  formattedChannel?: string;
 }

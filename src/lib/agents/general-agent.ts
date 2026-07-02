@@ -44,7 +44,10 @@ export const generalAgent: SubAgent = {
   async run(input: SubAgentRunInput, ctx: SkillContext): Promise<SubAgentRunOutput> {
     const profile = await loadSpecialistProfile(ctx.tenantId, input.triage.specialistId);
     await auditProfileBinding(ctx.audit, "general", profile, input.triage.specialistId);
-    const systemPrompt = applyGuardrailsToSystemPrompt(GENERAL_SYSTEM_PROMPT, profile);
+    const basePrompt = input.context.languageInstruction
+      ? `${input.context.languageInstruction}\n\n${GENERAL_SYSTEM_PROMPT}`
+      : GENERAL_SYSTEM_PROMPT;
+    const systemPrompt = applyGuardrailsToSystemPrompt(basePrompt, profile);
 
     const responded: RespondOutput = await respondSkill.run(
       {

@@ -1,0 +1,95 @@
+{
+  "_description": "Master sample playbook index for all test tenants. Each tenant's playbooks live in test-data/tenants/<tenant_id>/playbooks.json.",
+  "tenants": {
+    "r-mobile": {
+      "name": "R-Mobile (Telecom)",
+      "playbook_count": 3,
+      "playbooks": [
+        {
+          "id": "pb-rmobile-device-support",
+          "name": "Device Troubleshooting",
+          "topics": ["phone not turning on", "device won't charge", "screen cracked", "network connectivity", "app crashes", "slow device"],
+          "actions": ["order_lookup", "check_return_eligibility", "search_knowledge"],
+          "model_tier": "large",
+          "status": "active"
+        },
+        {
+          "id": "pb-rmobile-billing",
+          "name": "Billing & Account Management",
+          "topics": ["unexpected charges", "bill higher than expected", "payment failed", "dispute a charge", "change my plan"],
+          "actions": ["order_lookup", "process_refund", "search_knowledge", "escalate_to_human"],
+          "model_tier": "large",
+          "status": "active"
+        },
+        {
+          "id": "pb-rmobile-sales-upgrade",
+          "name": "Plan Upgrade & Device Sales",
+          "topics": ["upgrade my phone", "new plan", "family plan", "trade-in", "student discount"],
+          "actions": ["order_lookup", "search_knowledge"],
+          "model_tier": "small",
+          "status": "active"
+        }
+      ]
+    },
+    "ichiba": {
+      "name": "Ichiba (Marketplace)",
+      "playbook_count": 3,
+      "playbooks": [
+        {
+          "id": "pb-ichiba-order-shipping",
+          "name": "Order & Shipping Support",
+          "topics": ["where is my order", "package not delivered", "wrong item received", "cancel my order"],
+          "actions": ["order_lookup", "check_return_eligibility", "search_knowledge", "escalate_to_human"],
+          "model_tier": "large",
+          "status": "active"
+        },
+        {
+          "id": "pb-ichiba-returns-refunds",
+          "name": "Returns & Refunds",
+          "topics": ["return an item", "request a refund", "item arrived damaged", "refund not received"],
+          "actions": ["order_lookup", "check_return_eligibility", "process_refund", "generate_label", "escalate_to_human"],
+          "model_tier": "large",
+          "status": "active"
+        },
+        {
+          "id": "pb-ichiba-seller-support",
+          "name": "Seller Support",
+          "topics": ["listing was removed", "account suspended", "payout not received", "buyer dispute"],
+          "actions": ["search_knowledge", "escalate_to_human"],
+          "model_tier": "large",
+          "status": "active"
+        }
+      ]
+    },
+    "r-travel": {
+      "name": "RTravel (Travel Agency)",
+      "playbook_count": 3,
+      "playbooks": [
+        {
+          "id": "pb-rtravel-trip-planning",
+          "name": "Trip Planning & Recommendations",
+          "topics": ["where should I travel", "best destinations", "honeymoon ideas", "budget travel", "visa requirements"],
+          "actions": ["search_knowledge"],
+          "model_tier": "large",
+          "status": "active"
+        },
+        {
+          "id": "pb-rtravel-booking-changes",
+          "name": "Booking Changes & Cancellations",
+          "topics": ["change my flight", "cancel my booking", "reschedule hotel", "name correction", "travel voucher"],
+          "actions": ["order_lookup", "process_refund", "search_knowledge", "escalate_to_human"],
+          "model_tier": "large",
+          "status": "active"
+        },
+        {
+          "id": "pb-rtravel-emergency-support",
+          "name": "In-Trip Emergency Support",
+          "topics": ["missed my flight", "lost passport", "medical emergency abroad", "stranded at airport", "natural disaster"],
+          "actions": ["order_lookup", "search_knowledge", "process_refund", "escalate_to_human"],
+          "model_tier": "reasoning",
+          "status": "active"
+        }
+      ]
+    }
+  }
+}

@@ -79,9 +79,69 @@ export const piiInResponse: Policy = {
 
 export const offTopicResponse: Policy = {
   id: "off_topic_response",
-  description: "Off-topic detection (stub).",
+  description: "LLM-based off-topic detection for responses.",
   appliesTo: "response",
-  evaluate: (_input: PolicyCheckResponseInput) => allow(),
+  evaluate: async (input: PolicyCheckResponseInput) => {
+    // Quick heuristic first (no LLM call) — check for obviously off-topic patterns
+    const offTopicPatterns = [
+      /\b(bitcoin|crypto|nft|stocks|forex|gambling|casino|lottery)\b/i,
+      /\b(politics|election|democrat|republican|trump|biden)\b/i,
+      /\b(prescription|medication|diagnos|medical advice)\b/i,
+    ];
+    for (const pattern of offTopicPatterns) {
+      if (pattern.test(input.content)) {
+        return deny("Response contains off-topic content");
+      }
+    }
+    // Content passes heuristic — allow (LLM classification is done in supervisor)
+    return allow();
+  },
+};
+
+// Per-conversation rate limiting state (ephemeral, in-memory)
+const rateLimitStore = new Map<string, { count: number; windowStart: number }>();
+
+export const conversationRateLimit: Policy = {
+  id: "conversation_rate_limit",
+  description: "Max 50 tool calls per conversation window (10 min).",
+  appliesTo: "tool",
+  evaluate: (input: PolicyCheckToolInput) => {
+    const key = input.variables?.conversationId ?? "global";
+    const now = Date.now();
+    const window = 10 * 60 * 1000; // 10 min
+    const maxCalls = 50;
+
+    const state = rateLimitStore.get(key) ?? { count: 0, windowStart: now };
+    if (now - state.windowStart > window) {
+      // Reset window
+      rateLimitStore.set(key, { count: 1, windowStart: now });
+      return allow();
+    }
+    state.count++;
+    rateLimitStore.set(key, state);
+    if (state.count > maxCalls) {
+      return deny(`Rate limit exceeded: ${state.count} tool calls in 10 minutes (max ${maxCalls})`);
+    }
+    return allow();
+  },
+};
+
+export const refundActionLimit: Policy = {
+  id: "refund_action_limit",
+  description: "Max 2 refund operations per conversation.",
+  appliesTo: "tool",
+  evaluate: (input: PolicyCheckToolInput) => {
+    if (input.tool !== "process_refund") return allow();
+    const key = `refund:${input.variables?.conversationId ?? "global"}`;
+    const now = Date.now();
+    const state = rateLimitStore.get(key) ?? { count: 0, windowStart: now };
+    state.count++;
+    rateLimitStore.set(key, state);
+    if (state.count > 2) {
+      return deny("Maximum 2 refund operations per conversation");
+    }
+    return allow();
+  },
 };
 
 export const allRules: Policy[] = [
@@ -91,4 +151,6 @@ export const allRules: Policy[] = [
   slotTypeCheck,
   piiInResponse,
   offTopicResponse,
+  conversationRateLimit,
+  refundActionLimit,
 ];

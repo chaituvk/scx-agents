@@ -35,22 +35,22 @@ try {
     initPgSchema();
     seedDatabase();
   }).catch((err) => {
-    console.log("[db] PostgreSQL unavailable, using SQLite fallback:", err.message);
+    console.log("[db] PostgreSQL unavailable, using SQLite:", err.message);
     pgPool = null;
     usePostgres = false;
-    initSqlite();
+    // SQLite already initialized eagerly; nothing to do here.
   });
 } catch {
-  console.log("[db] PostgreSQL not configured, using SQLite fallback");
+  console.log("[db] PostgreSQL not configured, using SQLite");
   pgPool = null;
   usePostgres = false;
-  initSqlite();
 }
 
 // ── SQLite (fallback) ───────────────────────────────────────────────
 let sqliteDb: Database.Database | null = null;
 
 function initSqlite() {
+  if (sqliteDb) return;
   const DB_DIR = path.join(process.cwd(), "data");
   const DB_PATH = path.join(DB_DIR, "sierra.db");
   if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
@@ -61,10 +61,23 @@ function initSqlite() {
   seedDatabase();
 }
 
+// Initialize SQLite eagerly so the first request never races the async PG probe.
+initSqlite();
+
 // ── Unified Query Interface ─────────────────────────────────────────
 export interface QueryResult {
   rows: any[];
   rowCount?: number;
+}
+
+// Convert positional params [v1, v2] → {$1: v1, $2: v2} for SQLite.
+// All SQL in this codebase uses $1/$2 placeholders (PG style).
+// better-sqlite3 supports $name named params when passed as a single object.
+function toSqliteParams(params: any[]): Record<string, any> {
+  const named: Record<string, any> = {};
+  // better-sqlite3 strips the sigil: $1 in SQL binds to key "1" in the object.
+  params.forEach((v, i) => { named[String(i + 1)] = v; });
+  return named;
 }
 
 export async function query(sql: string, params: any[] = []): Promise<QueryResult> {
@@ -74,11 +87,12 @@ export async function query(sql: string, params: any[] = []): Promise<QueryResul
   }
   if (sqliteDb) {
     const stmt = sqliteDb.prepare(sql);
+    const bound = params.length > 0 ? toSqliteParams(params) : {};
     if (sql.trim().toLowerCase().startsWith("select")) {
-      const rows = stmt.all(...params) as any[];
+      const rows = (params.length > 0 ? stmt.all(bound) : stmt.all()) as any[];
       return { rows, rowCount: rows.length };
     } else {
-      const result = stmt.run(...params);
+      const result = params.length > 0 ? stmt.run(bound) : stmt.run();
       return { rows: [], rowCount: result.changes };
     }
   }
@@ -106,7 +120,8 @@ export async function run(sql: string, params: any[] = []): Promise<{ changes: n
   }
   if (sqliteDb) {
     const stmt = sqliteDb.prepare(sql);
-    const result = stmt.run(...params);
+    const bound = params.length > 0 ? toSqliteParams(params) : {};
+    const result = params.length > 0 ? stmt.run(bound) : stmt.run();
     return { changes: result.changes, lastID: String(result.lastInsertRowid) };
   }
   throw new Error("No database available");
@@ -403,6 +418,9 @@ function initPgSchema() {
       payload JSONB NOT NULL
     );
 
+    -- Migration: GDPR/CCPA compliance — add opt-out flag to users
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS ccpa_opt_out BOOLEAN DEFAULT false;
+
     -- Migration: add tenant_id to existing tables (must run before indexes)
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
     ALTER TABLE integrations ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE;
@@ -455,6 +473,389 @@ function initPgSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_audit_events_conversation_ts ON audit_events(conversation_id, ts);
     CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS experiments (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'draft',
+      variants JSONB NOT NULL,
+      metric_goal TEXT NOT NULL,
+      started_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS experiment_assignments (
+      id TEXT PRIMARY KEY,
+      experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL,
+      variant_id TEXT NOT NULL,
+      outcome TEXT,
+      outcome_at TIMESTAMPTZ,
+      assigned_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(experiment_id, conversation_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_experiments_tenant ON experiments(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_experiment_assignments_exp ON experiment_assignments(experiment_id);
+    CREATE INDEX IF NOT EXISTS idx_experiment_assignments_conv ON experiment_assignments(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS prompt_versions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      agent_type TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      system_prompt TEXT NOT NULL,
+      is_active BOOLEAN DEFAULT false,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(tenant_id, agent_type, version)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prompt_versions_tenant_type ON prompt_versions(tenant_id, agent_type);
+
+    CREATE TABLE IF NOT EXISTS playbooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      status TEXT DEFAULT 'draft',
+      persona TEXT DEFAULT '',
+      topics JSONB DEFAULT '[]',
+      instructions JSONB DEFAULT '[]',
+      policies JSONB DEFAULT '[]',
+      actions JSONB DEFAULT '[]',
+      escalation_triggers JSONB DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT DEFAULT 'reasoning',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbooks_tenant ON playbooks(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_playbooks_status ON playbooks(status);
+
+    CREATE TABLE IF NOT EXISTS playbook_versions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL REFERENCES playbooks(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      persona TEXT DEFAULT '',
+      topics JSONB DEFAULT '[]',
+      instructions JSONB DEFAULT '[]',
+      policies JSONB DEFAULT '[]',
+      actions JSONB DEFAULT '[]',
+      escalation_triggers JSONB DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT,
+      change_summary TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(playbook_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbook_versions_playbook ON playbook_versions(playbook_id);
+    CREATE INDEX IF NOT EXISTS idx_playbook_versions_tenant ON playbook_versions(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS proactive_triggers (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      trigger_type TEXT NOT NULL DEFAULT 'page_dwell',
+      conditions JSONB DEFAULT '{}',
+      message TEXT NOT NULL,
+      playbook_id TEXT REFERENCES playbooks(id) ON DELETE SET NULL,
+      delay_seconds INTEGER DEFAULT 30,
+      cooldown_hours INTEGER DEFAULT 24,
+      priority INTEGER DEFAULT 100,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_proactive_triggers_tenant ON proactive_triggers(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_proactive_triggers_status ON proactive_triggers(status);
+
+    CREATE TABLE IF NOT EXISTS playbooks (
+      conversation_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL,
+      variables JSONB DEFAULT '{}',
+      turn_count INTEGER DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (conversation_id, tenant_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbook_states_tenant ON playbook_states(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      scopes JSONB DEFAULT '["read","write"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      last_used_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      events JSONB DEFAULT '["conversation.created","message.sent","escalation.triggered","conversation.closed"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER DEFAULT 0,
+      last_attempt_at TIMESTAMPTZ,
+      next_retry_at TIMESTAMPTZ,
+      response_status INTEGER,
+      response_body TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
+
+    CREATE TABLE IF NOT EXISTS csat_ratings (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),
+      comment TEXT,
+      agent_id TEXT,
+      submitted_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(conversation_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_csat_tenant ON csat_ratings(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_csat_conversation ON csat_ratings(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS knowledge_documents (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      source_id TEXT REFERENCES knowledge_sources(id) ON DELETE SET NULL,
+      filename TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      chunk_count INTEGER DEFAULT 0,
+      error TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_tenant ON knowledge_documents(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_source ON knowledge_documents(source_id);
+
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      model TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      agent_type TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_tenant ON token_usage(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_conv ON token_usage(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
+
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo_url TEXT;
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS support_email TEXT;
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'UTC';
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'en';
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS max_tokens_per_turn INTEGER DEFAULT 2000;
+    ALTER TABLE tenants ADD COLUMN IF NOT EXISTS inactivity_timeout_mins INTEGER DEFAULT 30;
+
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      channel TEXT NOT NULL DEFAULT 'sms',
+      message_template TEXT,
+      use_ai_personalization BOOLEAN DEFAULT false,
+      playbook_id TEXT REFERENCES playbooks(id) ON DELETE SET NULL,
+      scheduled_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      total_contacts INTEGER DEFAULT 0,
+      sent_count INTEGER DEFAULT 0,
+      delivered_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0,
+      reply_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaigns_tenant ON campaigns(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+
+    CREATE TABLE IF NOT EXISTS campaign_contacts (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      contact_id TEXT,
+      name TEXT,
+      phone TEXT,
+      email TEXT,
+      variables JSONB DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      sent_at TIMESTAMPTZ,
+      delivered_at TIMESTAMPTZ,
+      failed_at TIMESTAMPTZ,
+      error TEXT,
+      conversation_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_campaign ON campaign_contacts(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_status ON campaign_contacts(status);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_tenant ON campaign_contacts(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS customer_profiles (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      external_id TEXT,
+      email TEXT,
+      phone TEXT,
+      name TEXT,
+      channel TEXT,
+      language TEXT DEFAULT 'en',
+      timezone TEXT,
+      tags JSONB DEFAULT '[]',
+      custom_attributes JSONB DEFAULT '{}',
+      total_conversations INTEGER DEFAULT 0,
+      last_seen_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(tenant_id, email),
+      UNIQUE(tenant_id, phone)
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_tenant ON customer_profiles(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_email ON customer_profiles(email);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_phone ON customer_profiles(phone);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_external ON customer_profiles(external_id);
+
+    CREATE TABLE IF NOT EXISTS customer_memories (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      customer_id TEXT NOT NULL REFERENCES customer_profiles(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      memory_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      importance INTEGER DEFAULT 5 CHECK(importance BETWEEN 1 AND 10),
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_customer ON customer_memories(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_tenant ON customer_memories(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_type ON customer_memories(memory_type);
+
+    CREATE TABLE IF NOT EXISTS conversation_tags (
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (conversation_id, tag)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tenant ON conversation_tags(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tag ON conversation_tags(tag);
+
+    CREATE TABLE IF NOT EXISTS routing_rules (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      priority INTEGER DEFAULT 100,
+      status TEXT NOT NULL DEFAULT 'active',
+      conditions JSONB NOT NULL DEFAULT '[]',
+      condition_logic TEXT NOT NULL DEFAULT 'any',
+      action_type TEXT NOT NULL,
+      action_payload JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_tenant ON routing_rules(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_status ON routing_rules(status);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_priority ON routing_rules(tenant_id, priority);
+
+    CREATE TABLE IF NOT EXISTS sla_configs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      first_response_minutes INTEGER NOT NULL DEFAULT 60,
+      resolution_minutes INTEGER NOT NULL DEFAULT 480,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_configs_tenant ON sla_configs(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS sla_breaches (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      sla_config_id TEXT REFERENCES sla_configs(id) ON DELETE SET NULL,
+      breach_type TEXT NOT NULL,
+      breached_at TIMESTAMPTZ NOT NULL,
+      acknowledged_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_tenant ON sla_breaches(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_conv ON sla_breaches(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS canned_responses (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      category TEXT DEFAULT 'general',
+      tags JSONB DEFAULT '[]',
+      shortcut TEXT,
+      use_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_tenant ON canned_responses(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_category ON canned_responses(category);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_canned_responses_shortcut ON canned_responses(tenant_id, shortcut) WHERE shortcut IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS quality_reviews (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL,
+      verdict TEXT NOT NULL CHECK (verdict IN ('approved', 'flagged', 'corrected')),
+      rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT,
+      corrected_content TEXT,
+      reviewed_by TEXT,
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (tenant_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_tenant ON quality_reviews(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_message ON quality_reviews(message_id);
   `).catch((err) => console.log("[db] PG schema init warning:", err.message));
 }
 
@@ -741,6 +1142,356 @@ function initSqliteSchema() {
     CREATE INDEX IF NOT EXISTS idx_audit_events_tenant ON audit_events(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_journey_scenarios_tenant ON journey_scenarios(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_journey_scenarios_journey ON journey_scenarios(journey_id);
+
+    CREATE TABLE IF NOT EXISTS experiments (
+      id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+      description TEXT, status TEXT DEFAULT 'draft', variants TEXT NOT NULL,
+      metric_goal TEXT NOT NULL, started_at TEXT, ended_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS experiment_assignments (
+      id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+      variant_id TEXT NOT NULL, outcome TEXT, outcome_at TEXT,
+      assigned_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(experiment_id, conversation_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS prompt_versions (
+      id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, agent_type TEXT NOT NULL,
+      version INTEGER NOT NULL, system_prompt TEXT NOT NULL,
+      is_active INTEGER DEFAULT 0, notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, agent_type, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS playbooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      status TEXT DEFAULT 'draft',
+      persona TEXT DEFAULT '',
+      topics TEXT DEFAULT '[]',
+      instructions TEXT DEFAULT '[]',
+      policies TEXT DEFAULT '[]',
+      actions TEXT DEFAULT '[]',
+      escalation_triggers TEXT DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT DEFAULT 'reasoning',
+      created_at TEXT,
+      updated_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS playbook_versions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL REFERENCES playbooks(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      persona TEXT DEFAULT '',
+      topics TEXT DEFAULT '[]',
+      instructions TEXT DEFAULT '[]',
+      policies TEXT DEFAULT '[]',
+      actions TEXT DEFAULT '[]',
+      escalation_triggers TEXT DEFAULT '[]',
+      end_message TEXT,
+      model_tier TEXT,
+      change_summary TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(playbook_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_playbook_versions_playbook ON playbook_versions(playbook_id);
+
+    CREATE TABLE IF NOT EXISTS proactive_triggers (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      trigger_type TEXT NOT NULL DEFAULT 'page_dwell',
+      conditions TEXT DEFAULT '{}',
+      message TEXT NOT NULL,
+      playbook_id TEXT,
+      delay_seconds INTEGER DEFAULT 30,
+      cooldown_hours INTEGER DEFAULT 24,
+      priority INTEGER DEFAULT 100,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_proactive_triggers_tenant ON proactive_triggers(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS playbook_states (
+      conversation_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      playbook_id TEXT NOT NULL,
+      variables TEXT DEFAULT '{}',
+      turn_count INTEGER DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (conversation_id, tenant_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      scopes TEXT DEFAULT '["read","write"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      last_used_at TEXT,
+      expires_at TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      events TEXT DEFAULT '["conversation.created","message.sent","escalation.triggered","conversation.closed"]',
+      status TEXT NOT NULL DEFAULT 'active',
+      description TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_tenant ON webhooks(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER DEFAULT 0,
+      last_attempt_at TEXT,
+      next_retry_at TEXT,
+      response_status INTEGER,
+      response_body TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
+
+    CREATE TABLE IF NOT EXISTS csat_ratings (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),
+      comment TEXT,
+      agent_id TEXT,
+      submitted_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(conversation_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_csat_tenant ON csat_ratings(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_csat_conversation ON csat_ratings(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS knowledge_documents (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      source_id TEXT REFERENCES knowledge_sources(id) ON DELETE SET NULL,
+      filename TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      chunk_count INTEGER DEFAULT 0,
+      error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_tenant ON knowledge_documents(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_docs_source ON knowledge_documents(source_id);
+
+    CREATE TABLE IF NOT EXISTS token_usage (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      model TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      total_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      agent_type TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_token_usage_tenant ON token_usage(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_conv ON token_usage(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
+
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      channel TEXT NOT NULL DEFAULT 'sms',
+      message_template TEXT,
+      use_ai_personalization INTEGER DEFAULT 0,
+      playbook_id TEXT,
+      scheduled_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
+      total_contacts INTEGER DEFAULT 0,
+      sent_count INTEGER DEFAULT 0,
+      delivered_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0,
+      reply_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaigns_tenant ON campaigns(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+
+    CREATE TABLE IF NOT EXISTS campaign_contacts (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      contact_id TEXT,
+      name TEXT,
+      phone TEXT,
+      email TEXT,
+      variables TEXT DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      sent_at TEXT,
+      delivered_at TEXT,
+      failed_at TEXT,
+      error TEXT,
+      conversation_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_campaign ON campaign_contacts(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_status ON campaign_contacts(status);
+    CREATE INDEX IF NOT EXISTS idx_campaign_contacts_tenant ON campaign_contacts(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS customer_profiles (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      external_id TEXT,
+      email TEXT,
+      phone TEXT,
+      name TEXT,
+      channel TEXT,
+      language TEXT DEFAULT 'en',
+      timezone TEXT,
+      tags TEXT DEFAULT '[]',
+      custom_attributes TEXT DEFAULT '{}',
+      total_conversations INTEGER DEFAULT 0,
+      last_seen_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, email),
+      UNIQUE(tenant_id, phone)
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_tenant ON customer_profiles(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_email ON customer_profiles(email);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_phone ON customer_profiles(phone);
+    CREATE INDEX IF NOT EXISTS idx_customer_profiles_external ON customer_profiles(external_id);
+
+    CREATE TABLE IF NOT EXISTS customer_memories (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      customer_id TEXT NOT NULL REFERENCES customer_profiles(id) ON DELETE CASCADE,
+      conversation_id TEXT,
+      memory_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      importance INTEGER DEFAULT 5 CHECK(importance BETWEEN 1 AND 10),
+      expires_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_customer ON customer_memories(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_tenant ON customer_memories(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_customer_memories_type ON customer_memories(memory_type);
+
+    CREATE TABLE IF NOT EXISTS conversation_tags (
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      tag TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (conversation_id, tag)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tenant ON conversation_tags(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_conv_tags_tag ON conversation_tags(tag);
+
+    CREATE TABLE IF NOT EXISTS routing_rules (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      priority INTEGER DEFAULT 100,
+      status TEXT NOT NULL DEFAULT 'active',
+      conditions TEXT NOT NULL DEFAULT '[]',
+      condition_logic TEXT NOT NULL DEFAULT 'any',
+      action_type TEXT NOT NULL,
+      action_payload TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_tenant ON routing_rules(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_status ON routing_rules(status);
+    CREATE INDEX IF NOT EXISTS idx_routing_rules_priority ON routing_rules(tenant_id, priority);
+
+    CREATE TABLE IF NOT EXISTS sla_configs (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      first_response_minutes INTEGER NOT NULL DEFAULT 60,
+      resolution_minutes INTEGER NOT NULL DEFAULT 480,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_configs_tenant ON sla_configs(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS sla_breaches (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      sla_config_id TEXT REFERENCES sla_configs(id) ON DELETE SET NULL,
+      breach_type TEXT NOT NULL,
+      breached_at TEXT NOT NULL,
+      acknowledged_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_tenant ON sla_breaches(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_sla_breaches_conv ON sla_breaches(conversation_id);
+
+    CREATE TABLE IF NOT EXISTS canned_responses (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      category TEXT DEFAULT 'general',
+      tags TEXT DEFAULT '[]',
+      shortcut TEXT,
+      use_count INTEGER DEFAULT 0,
+      created_by TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_tenant ON canned_responses(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_canned_responses_category ON canned_responses(category);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_canned_responses_shortcut ON canned_responses(tenant_id, shortcut);
+
+    CREATE TABLE IF NOT EXISTS quality_reviews (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      message_id TEXT NOT NULL,
+      verdict TEXT NOT NULL CHECK (verdict IN ('approved', 'flagged', 'corrected')),
+      rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT,
+      corrected_content TEXT,
+      reviewed_by TEXT,
+      reviewed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE (tenant_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_tenant ON quality_reviews(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_quality_reviews_message ON quality_reviews(message_id);
   `);
 
   // Idempotent additive column migrations for existing SQLite databases.
@@ -758,6 +1509,30 @@ function initSqliteSchema() {
   for (const [name, type] of additions) {
     if (!existing.has(name)) {
       sqliteDb.exec(`ALTER TABLE dialog_states ADD COLUMN ${name} ${type}`);
+    }
+  }
+
+  // GDPR/CCPA: add ccpa_opt_out to users table
+  const userCols = sqliteDb.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+  const userColSet = new Set(userCols.map((c) => c.name));
+  if (!userColSet.has("ccpa_opt_out")) {
+    sqliteDb.exec(`ALTER TABLE users ADD COLUMN ccpa_opt_out INTEGER DEFAULT 0`);
+  }
+
+  // Add new tenant settings columns
+  const tenantCols = sqliteDb.prepare("PRAGMA table_info(tenants)").all() as { name: string }[];
+  const tenantColSet = new Set(tenantCols.map((c) => c.name));
+  const tenantAdditions: Array<[string, string]> = [
+    ["logo_url", "TEXT"],
+    ["support_email", "TEXT"],
+    ["timezone", "TEXT DEFAULT 'UTC'"],
+    ["language", "TEXT DEFAULT 'en'"],
+    ["max_tokens_per_turn", "INTEGER DEFAULT 2000"],
+    ["inactivity_timeout_mins", "INTEGER DEFAULT 30"],
+  ];
+  for (const [name, type] of tenantAdditions) {
+    if (!tenantColSet.has(name)) {
+      sqliteDb.exec(`ALTER TABLE tenants ADD COLUMN ${name} ${type}`);
     }
   }
 }
@@ -1089,6 +1864,77 @@ async function doSeed() {
     await runQ(
       `INSERT OR IGNORE INTO knowledge_gaps (id, tenant_id, question, frequency, status, suggested_answer, source_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [g.id, g.tenant_id, g.question, g.frequency, g.status, g.suggested_answer, g.source_ids ? JSON.stringify(g.source_ids) : null, now]
+    );
+  }
+
+  // ── Canned Responses (r-mobile) ──────────────────────────────────
+  const cannedResponses = [
+    {
+      id: "cr-1",
+      tenant_id: "r-mobile",
+      title: "Greeting / Opening",
+      content: "Hi there! Welcome to R-Mobile support. My name is Alex and I'm here to help you today. Could you please describe what you need assistance with?",
+      category: "greeting",
+      tags: JSON.stringify(["greeting", "opening", "welcome"]),
+      shortcut: "/hi",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-2",
+      tenant_id: "r-mobile",
+      title: "Looking Into That",
+      content: "I completely understand your concern. Let me look into that for you right away — this will just take a moment.",
+      category: "general",
+      tags: JSON.stringify(["lookup", "investigating", "hold"]),
+      shortcut: "/look",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-3",
+      tenant_id: "r-mobile",
+      title: "Order / Account Tracking",
+      content: "I've pulled up your account details. Your order is currently {{order_status}} and is expected to arrive by {{estimated_delivery}}. You can also track it in real-time at {{tracking_link}}.",
+      category: "order",
+      tags: JSON.stringify(["order", "tracking", "shipping", "delivery"]),
+      shortcut: "/track",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-4",
+      tenant_id: "r-mobile",
+      title: "Apology Template",
+      content: "I sincerely apologize for the inconvenience this has caused you. This is certainly not the experience we want our customers to have. I'm going to make this right for you.",
+      category: "general",
+      tags: JSON.stringify(["apology", "sorry", "escalation"]),
+      shortcut: "/sorry",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-5",
+      tenant_id: "r-mobile",
+      title: "Closing / Farewell",
+      content: "Thank you for contacting R-Mobile support! I'm glad I could help resolve your issue today. If you have any other questions in the future, please don't hesitate to reach out. Have a wonderful day!",
+      category: "closing",
+      tags: JSON.stringify(["closing", "farewell", "goodbye"]),
+      shortcut: "/bye",
+      created_by: "user-1",
+    },
+    {
+      id: "cr-6",
+      tenant_id: "r-mobile",
+      title: "Escalation to Manager",
+      content: "I understand your frustration, and I'd like to escalate this to my supervisor who has additional authority to help resolve this for you. Please allow me to transfer you — your wait time should be under 2 minutes.",
+      category: "escalation",
+      tags: JSON.stringify(["escalation", "manager", "supervisor", "transfer"]),
+      shortcut: "/escalate",
+      created_by: "user-1",
+    },
+  ];
+
+  for (const cr of cannedResponses) {
+    await runQ(
+      `INSERT OR IGNORE INTO canned_responses (id, tenant_id, title, content, category, tags, shortcut, use_count, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [cr.id, cr.tenant_id, cr.title, cr.content, cr.category, cr.tags, cr.shortcut, 0, cr.created_by, now, now]
     );
   }
 
