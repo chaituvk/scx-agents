@@ -26,8 +26,10 @@ services:
     image: redis:7-alpine
     container_name: sierra-redis
     restart: unless-stopped
+    # Host port matches the default REDIS_PORT (6379) so local dev and the
+    # setup script line up. Change the left side if 6379 is taken.
     ports:
-      - "6380:6379"
+      - "6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
@@ -36,6 +38,32 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # ── App (full-stack local run) ────────────────────────────────────
+  # Opt in with:  docker compose --profile app up --build
+  # Infra-only (default) stays `docker compose up`.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sierra-app
+    profiles: ["app"]
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      BACKEND_PROVIDER: local
+      # Containers reach the sibling services by service name, not localhost.
+      DATABASE_URL: postgresql://sierra:sierra2026@postgres:5432/sierra
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      SEED_ON_BOOT: "1"
+      JWT_SECRET: ${JWT_SECRET:-sierra-local-dev-secret-change-in-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:

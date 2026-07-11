@@ -48,12 +48,19 @@ echo ""
 if [ ! -f .env.local ]; then
     echo "📝 Creating .env.local with Docker defaults..."
     cat > .env.local << 'EOF'
+# ── Backend provider ────────────────────────────────────────────────
+# local | supabase | aws | gcp | auto  (see .env.example / DEPLOYMENT.md)
+BACKEND_PROVIDER=local
+
 # ── Database ────────────────────────────────────────────────────────
 DATABASE_URL=postgresql://sierra:sierra2026@localhost:5432/sierra
 
 # ── Cache ───────────────────────────────────────────────────────────
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
+
+# ── Seeding (demo tenants + default admin) — local/dev only ─────────
+SEED_ON_BOOT=1
 
 # ── LLM Providers (fill in at least one) ────────────────────────────
 # OLLAMA_HOST=http://localhost:11434

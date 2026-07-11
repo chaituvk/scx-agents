@@ -2,49 +2,70 @@ import { Pool, PoolClient } from "pg";
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { getBackendConfig, describeBackend } from "./providers/config";
+
+// ── Backend selection ───────────────────────────────────────────────
+// Connection details (Supabase / AWS / GCP / local) come from the
+// provider layer; this module only owns the query engine and schema.
+const backend = getBackendConfig();
 
 // ── PostgreSQL (primary) ────────────────────────────────────────────
 let pgPool: Pool | null = null;
 let usePostgres = false;
 
-const pgUrl = process.env.DATABASE_URL || "postgresql://sierra:sierra2026@localhost:5432/sierra";
+// Seeds (demo tenants + default superadmin) only run when explicitly
+// enabled. Never auto-seed a production database. Set SEED_ON_BOOT=1 for
+// local dev / demo environments.
+const seedOnBoot = /^(1|true|yes)$/i.test(process.env.SEED_ON_BOOT || "");
+function maybeSeed() {
+  if (seedOnBoot) seedDatabase();
+}
 
-// Pool sizing (Stage 12): default 50 to comfortably support ~100 tenants
-// with light concurrent traffic on a single Next.js node. Override via
-// DB_POOL_MAX. idleTimeoutMillis intentionally short (30s) so idle
-// connections release back to Postgres rather than holding a slot per
-// tenant indefinitely.
-const poolMax = (() => {
-  const raw = process.env.DB_POOL_MAX;
-  if (!raw) return 50;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 50;
-})();
+if (backend.database.preferSqlite) {
+  console.log("[db] Provider requested embedded SQLite (local dev)");
+  initSqlite();
+} else {
+  try {
+    pgPool = new Pool({
+      connectionString: backend.database.connectionString,
+      ssl: backend.database.ssl,
+      max: backend.database.poolMax,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+    });
 
-try {
-  pgPool = new Pool({
-    connectionString: pgUrl,
-    max: poolMax,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-  });
-
-  pgPool.query("SELECT 1").then(() => {
-    usePostgres = true;
-    console.log("[db] Connected to PostgreSQL");
-    initPgSchema();
-    seedDatabase();
-  }).catch((err) => {
-    console.log("[db] PostgreSQL unavailable, using SQLite fallback:", err.message);
+    pgPool.query("SELECT 1").then(async () => {
+      usePostgres = true;
+      const info = describeBackend();
+      console.log(`[db] Connected to PostgreSQL (provider=${info.provider}, ssl=${info.database.ssl})`);
+      await initPgSchema();
+      maybeSeed();
+    }).catch((err) => {
+      pgPool = null;
+      usePostgres = false;
+      handleConnectFailure(err.message);
+    });
+  } catch (err) {
     pgPool = null;
     usePostgres = false;
+    handleConnectFailure(err instanceof Error ? err.message : String(err));
+  }
+}
+
+// Only the `local` provider silently falls back to embedded SQLite. For a
+// managed provider (supabase/aws/gcp), a connection failure must NOT quietly
+// serve an empty local DB — leave the engine unavailable so queries throw
+// and /api/health reports "degraded" (503) instead of masking the outage.
+function handleConnectFailure(message: string) {
+  if (backend.provider === "local") {
+    console.log("[db] PostgreSQL unavailable, using SQLite fallback:", message);
     initSqlite();
-  });
-} catch {
-  console.log("[db] PostgreSQL not configured, using SQLite fallback");
-  pgPool = null;
-  usePostgres = false;
-  initSqlite();
+  } else {
+    console.error(
+      `[db] FATAL: could not connect to ${backend.provider} Postgres — ${message}. ` +
+        "Refusing to fall back to SQLite for a managed provider."
+    );
+  }
 }
 
 // ── SQLite (fallback) ───────────────────────────────────────────────
@@ -58,7 +79,7 @@ function initSqlite() {
   sqliteDb.pragma("journal_mode = WAL");
   sqliteDb.pragma("foreign_keys = ON");
   initSqliteSchema();
-  seedDatabase();
+  maybeSeed();
 }
 
 // ── Unified Query Interface ─────────────────────────────────────────
@@ -67,13 +88,21 @@ export interface QueryResult {
   rowCount?: number;
 }
 
+// better-sqlite3 uses positional "?" placeholders, but every repository
+// query is written with Postgres-style "$1, $2, ..." (always emitted in
+// ascending order). Translate for the SQLite engine so the local fallback
+// actually runs instead of throwing "Too many parameter values provided".
+function toSqlitePlaceholders(sql: string): string {
+  return sql.replace(/\$(\d+)/g, "?");
+}
+
 export async function query(sql: string, params: any[] = []): Promise<QueryResult> {
   if (usePostgres && pgPool) {
     const result = await pgPool.query(sql, params);
     return { rows: result.rows, rowCount: result.rowCount || undefined };
   }
   if (sqliteDb) {
-    const stmt = sqliteDb.prepare(sql);
+    const stmt = sqliteDb.prepare(toSqlitePlaceholders(sql));
     if (sql.trim().toLowerCase().startsWith("select")) {
       const rows = stmt.all(...params) as any[];
       return { rows, rowCount: rows.length };
@@ -105,7 +134,7 @@ export async function run(sql: string, params: any[] = []): Promise<{ changes: n
     return { changes: result.rowCount || 0, lastID };
   }
   if (sqliteDb) {
-    const stmt = sqliteDb.prepare(sql);
+    const stmt = sqliteDb.prepare(toSqlitePlaceholders(sql));
     const result = stmt.run(...params);
     return { changes: result.changes, lastID: String(result.lastInsertRowid) };
   }
@@ -136,9 +165,9 @@ export function isPostgres(): boolean {
 }
 
 // ── PostgreSQL Schema ───────────────────────────────────────────────
-function initPgSchema() {
-  if (!pgPool) return;
-  pgPool.query(`
+function initPgSchema(): Promise<unknown> {
+  if (!pgPool) return Promise.resolve();
+  return pgPool.query(`
     CREATE TABLE IF NOT EXISTS tenants (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

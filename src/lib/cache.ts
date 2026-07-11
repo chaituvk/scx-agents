@@ -1,4 +1,5 @@
 import { LRUCache } from "lru-cache";
+import { getBackendConfig } from "./providers/config";
 
 let redis: any = null;
 let redisAvailable = false;
@@ -7,15 +8,31 @@ let redisInitPromise: Promise<void> | null = null;
 async function initRedis(): Promise<void> {
   if (redisInitPromise) return redisInitPromise;
   redisInitPromise = (async () => {
+    const cacheCfg = getBackendConfig().cache;
+    // Provider selected in-process memory (e.g. managed provider with no
+    // Redis endpoint configured) — skip Redis entirely.
+    if (cacheCfg.driver === "memory") {
+      redisAvailable = false;
+      return;
+    }
     try {
       const { Redis } = await import("ioredis");
-      redis = new Redis({
-        host: process.env.REDIS_HOST || "127.0.0.1",
-        port: parseInt(process.env.REDIS_PORT || "6379"),
+      const common = {
         maxRetriesPerRequest: 1,
         connectTimeout: 2000,
         lazyConnect: true,
-      });
+      };
+      // A full URL (Upstash / ElastiCache / Memorystore) wins; otherwise
+      // build from host/port/tls/password resolved by the provider layer.
+      redis = cacheCfg.url
+        ? new Redis(cacheCfg.url, common)
+        : new Redis({
+            host: cacheCfg.host || "127.0.0.1",
+            port: cacheCfg.port ?? 6379,
+            password: cacheCfg.password,
+            ...(cacheCfg.tls ? { tls: {} } : {}),
+            ...common,
+          });
       redis.on("error", () => {}); // suppress connection errors
       await redis.connect().catch(() => {});
       redisAvailable = redis.status === "ready" || redis.status === "connecting";

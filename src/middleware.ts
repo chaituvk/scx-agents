@@ -7,6 +7,7 @@ const PUBLIC_PATHS = [
   "/chat",
   "/widget-demo",
   "/widget-iframe",
+  "/api/health",
   "/api/auth/login",
   "/api/auth/logout",
   "/api/auth/me",
