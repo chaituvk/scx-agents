@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "seed:synthetic": "node tests/synthetic/generate.js",
+    "test:data": "node tests/synthetic/dataset.test.js"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
