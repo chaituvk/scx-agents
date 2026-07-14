@@ -1,8 +1,11 @@
 import { Pool, PoolClient } from "pg";
-import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { getBackendConfig, describeBackend } from "./providers/config";
+
+// better-sqlite3 is a native addon used only for the local SQLite fallback.
+// It is required lazily so a Postgres/Supabase deployment never loads the
+// native binding (and never fails when it is absent from the image).
 
 // ── Backend selection ───────────────────────────────────────────────
 // Connection details (Supabase / AWS / GCP / local) come from the
@@ -69,12 +72,14 @@ function handleConnectFailure(message: string) {
 }
 
 // ── SQLite (fallback) ───────────────────────────────────────────────
-let sqliteDb: Database.Database | null = null;
+let sqliteDb: any = null;
 
 function initSqlite() {
   const DB_DIR = path.join(process.cwd(), "data");
   const DB_PATH = path.join(DB_DIR, "sierra.db");
   if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Database = require("better-sqlite3");
   sqliteDb = new Database(DB_PATH);
   sqliteDb.pragma("journal_mode = WAL");
   sqliteDb.pragma("foreign_keys = ON");

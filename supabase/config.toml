@@ -1,0 +1,15 @@
+# Minimal Supabase CLI config. Replace project_id with your project ref
+# (Dashboard → Settings → General → Reference ID), then link with:
+#   supabase link --project-ref <your-ref>
+# Apply schema + seed with:
+#   supabase db push          # runs migrations/*.sql
+#   supabase db reset         # migrations + seed.sql (LOCAL dev only)
+project_id = "your-project-ref"
+
+[db]
+# Local dev Postgres major version (should match your Supabase project: 15).
+major_version = 15
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
