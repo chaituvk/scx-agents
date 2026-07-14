@@ -37,10 +37,21 @@ if (!url) fail("Set SUPABASE_DB_URL (or DATABASE_URL) to your Postgres connectio
 if (!email || !password) fail("Set SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD.");
 if (password.length < 10) fail("SEED_ADMIN_PASSWORD is too short — use at least 10 characters.");
 
-const isLocal = /@(localhost|127\.0\.0\.1|postgres)[:/]/.test(url);
+// SSL: managed Postgres (Supabase/RDS/Cloud SQL) needs TLS, so it is the
+// default. Local hosts and unix sockets skip it. Override with
+// DB_SSL=disable (matches the app's provider config convention).
+function resolveSsl() {
+  const mode = (process.env.DB_SSL || "").toLowerCase();
+  if (mode === "disable" || mode === "off" || mode === "false") return false;
+  const isLocal =
+    /@(localhost|127\.0\.0\.1|postgres)[:/]/.test(url) || /[?&]host=\/(tmp|var|run)/.test(url);
+  if (isLocal && !mode) return false;
+  return { rejectUnauthorized: mode === "strict" };
+}
+
 const pool = new Pool({
   connectionString: url,
-  ssl: isLocal ? false : { rejectUnauthorized: false },
+  ssl: resolveSsl(),
   connectionTimeoutMillis: 8000,
 });
 
